@@ -1,0 +1,11 @@
+{
+  "appId": "io.github.n8nmobile.app",
+  "appName": "n8n Mobile",
+  "webDir": "public",
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

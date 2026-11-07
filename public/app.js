@@ -6,6 +6,8 @@
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const app = $('#app');
+// Running inside the Android APK (Capacitor)? Its native HTTP layer has no CORS limits.
+const IS_NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 
 const ICONS = {
   home: '<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
@@ -91,7 +93,9 @@ async function rawFetch(path, { method = 'GET', query, body, headers = {}, apiKe
   try {
     res = await fetch(reqUrl(path, query), { method, headers: h, body: payload });
   } catch (e) {
-    throw new ApiError(S.conn?.viaProxy
+    throw new ApiError(IS_NATIVE
+      ? 'Could not reach n8n. Check the URL (it must start with https://) and that this phone can reach your server.'
+      : S.conn?.viaProxy
       ? 'Could not reach the app server. Is server.js running?'
       : 'Could not reach n8n. This is usually CORS: the browser blocked the request. Run the app through server.js (see README) or add CORS headers on your reverse proxy.', 0);
   }
@@ -636,7 +640,7 @@ function openSettings() {
     <div class="section-title">Connection</div>
     <div class="card"><dl class="kv">
       <dt>Server</dt><dd>${esc(baseUrl())}</dd>
-      <dt>Route</dt><dd>${S.conn.viaProxy ? 'Through app server (no CORS)' : 'Direct from browser'}</dd>
+      <dt>Route</dt><dd>${IS_NATIVE ? 'Direct from the Android app' : S.conn.viaProxy ? 'Through app server (no CORS)' : 'Direct from browser'}</dd>
       <dt>API key</dt><dd class="mono">••••${esc(S.conn.apiKey.slice(-4))}</dd>
     </dl></div>
     <div class="section-title">Statistics</div>
@@ -657,7 +661,7 @@ function openSettings() {
 async function boot() {
   try {
     const r = await fetch('app-config.json', { cache: 'no-store' });
-    if (r.ok && (r.headers.get('content-type') || '').includes('json')) S.cfg = { ...S.cfg, ...(await r.json()) };
+    if (!IS_NATIVE && r.ok && (r.headers.get('content-type') || '').includes('json')) S.cfg = { ...S.cfg, ...(await r.json()) };
   } catch {}
   if (S.conn && S.cfg.proxy && S.cfg.n8nUrl) S.conn.url = S.cfg.n8nUrl; // server decides the target
   if (S.conn) S.conn.viaProxy = S.cfg.proxy;
@@ -665,7 +669,13 @@ async function boot() {
   if (S.conn) loadAll();
   setInterval(() => { if (S.conn && !document.hidden && !S.loading && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)) render(); }, 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && S.conn && S.loadedAt && Date.now() - S.loadedAt > 120000) loadAll(); });
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (IS_NATIVE) {
+    // Open n8n links (editor, forms, history) in the phone's browser instead of inside the app.
+    document.addEventListener('click', (ev) => {
+      const a = ev.target.closest && ev.target.closest('a[target="_blank"]');
+      if (a && a.href) { ev.preventDefault(); window.location.href = a.href; } // Capacitor hands external URLs to the browser
+    });
+  } else if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 boot();
 })();

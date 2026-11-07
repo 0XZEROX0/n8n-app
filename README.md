@@ -8,7 +8,9 @@ A small installable web app (PWA) for Android that connects to your self-hosted 
   <img src="docs/screenshots/execution.png" width="230" alt="Execution details">
 </p>
 
-More docs: [Deployment](docs/deployment.md) · [Architecture](docs/architecture.md) · [n8n API notes](docs/n8n-api-notes.md) · [Changelog](CHANGELOG.md)
+**Two ways to use it:** install the **Android APK** from [Releases](https://github.com/0XZEROX0/n8n-app/releases/latest) (no server needed, see [docs/android.md](docs/android.md)), or host it as a web app next to n8n (below).
+
+More docs: [Android APK](docs/android.md) · [Deployment](docs/deployment.md) · [Architecture](docs/architecture.md) · [n8n API notes](docs/n8n-api-notes.md) · [Changelog](CHANGELOG.md)
 
 ## Features
 
@@ -22,7 +24,11 @@ More docs: [Deployment](docs/deployment.md) · [Architecture](docs/architecture.
 
 n8n's public API uses an **API key** (not email/password). In n8n go to **Settings → n8n API → Create an API key**, then paste your n8n URL and the key into the app. The key is stored only on your phone (uncheck "Keep me signed in" to forget it when the browser closes).
 
-## Running it (recommended: next to your n8n)
+## Android APK (easiest)
+
+Download `n8n-mobile-<version>.apk` from the [latest release](https://github.com/0XZEROX0/n8n-app/releases/latest), open it on your phone, and allow the install. The APK connects to n8n directly, so no server or CORS setup is needed. Details and signing: [docs/android.md](docs/android.md).
+
+## Running it as a web app (next to your n8n)
 
 Browsers block a web page from calling another site's API unless that site allows it (CORS), and n8n's API doesn't allow it by default. So the app comes with a tiny server (`server.js`, no dependencies) that serves the app **and** forwards API calls to n8n. No CORS setup needed.
 
@@ -99,4 +105,8 @@ public/app.js        all app logic
 public/styles.css    mobile-first styles (light/dark)
 public/sw.js         offline app shell cache (never caches n8n data)
 public/manifest.webmanifest, public/icons/
+capacitor.config.json  Android wrapper settings (Capacitor, native HTTP)
+android/             Android Studio project for the APK
+assets/              icon and splash sources for the APK
+.github/workflows/android.yml   builds the APK and attaches it to releases
 ```
