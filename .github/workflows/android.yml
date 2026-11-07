@@ -1,0 +1,86 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Attach the APK to this existing release tag (e.g. v0.1.0). Leave empty to only build."
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # GitHub's Ubuntu runners ship the Android SDK; just make sure the versions Capacitor needs are there.
+      - name: Install Android SDK packages
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" "platform-tools" > /dev/null
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Copy web app into the Android project
+        run: npx cap sync android
+
+      - name: Work out version
+        id: ver
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.release_tag }}"
+          if [ -n "$TAG" ]; then NAME="${TAG#v}"; else NAME="$(node -p "require('./package.json').version")-build.${{ github.run_number }}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Set up signing key (if secrets are set)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "Signing with your release key."
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: APK is signed with a temporary debug key. See docs/android.md."
+          fi
+
+      - name: Build APK
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon \
+            -PversionCode=${{ github.run_number }} -PversionName=${{ steps.ver.outputs.name }}
+          mkdir -p ../dist
+          cp app/build/outputs/apk/release/app-release.apk "../dist/n8n-mobile-${{ steps.ver.outputs.name }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: n8n-mobile-apk
+          path: dist/*.apk
+
+      - name: Attach APK to release
+        if: steps.ver.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ steps.ver.outputs.tag }}" dist/*.apk --clobber
