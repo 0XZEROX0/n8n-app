@@ -1,27 +1,30 @@
 # n8n API notes
 
-The app uses n8n's public REST API (`/api/v1`) with an API key. Endpoints used:
+The app signs in like the n8n editor does and uses n8n's own REST API (`/rest`), with n8n's session cookie (`n8n-auth`). Every request also sends a `browser-id` header: n8n ties the session to it.
 
 | Feature | Endpoint |
 | --- | --- |
-| Test login, list workflows | `GET /workflows?limit=&cursor=` |
-| Workflow details | `GET /workflows/{id}` |
-| Activate / deactivate | `POST /workflows/{id}/activate`, `/deactivate` |
-| Executions (overview, lists) | `GET /executions?limit=&cursor=&workflowId=` |
-| Execution steps | `GET /executions/{id}?includeData=true` |
-| Retry | `POST /executions/{id}/retry` (newer n8n only) |
-| Run a workflow | its production webhook: `{METHOD} /webhook/{path}` |
+| Check the address is n8n | `GET /rest/settings` (no sign-in needed; 401 here means a password in front of n8n) |
+| Sign in | `POST /rest/login` `{ emailOrLdapLoginId, password, mfaCode?, mfaRecoveryCode? }` (older n8n: `email`) |
+| Two-step verification needed | `401` with `code: 998` → ask for the code and sign in again with `mfaCode` |
+| Who am I / still signed in? | `GET /rest/login` |
+| Sign out | `POST /rest/logout` |
+| Workflows | `GET /rest/workflows?select=[...]&skip&take` |
+| Workflow details | `GET /rest/workflows/{id}` |
+| Activate / deactivate | `POST /rest/workflows/{id}/activate` `{ versionId }`, `/deactivate` (older n8n: `PATCH` with `active`) |
+| Run now | `POST /rest/workflows/{id}/run` `{ workflowData, triggerToStartFrom: { name } }` |
+| Edit history | `GET /rest/workflow-history/workflow/{id}?take=50&skip=0` |
+| Executions | `GET /rest/executions?filter={...}&limit=&lastId=` → `{ results, count }` |
+| Execution steps | `GET /rest/executions/{id}`; its `data` is in "flatted" form, decoded in the app |
+| Retry | `POST /rest/executions/{id}/retry` `{ loadWorkflow: true }` |
+| Webhook workflows | the production webhook: `{METHOD} /webhook/{path}` |
+
+Tested against n8n 2.46.6. This API is n8n's internal one and isn't versioned, so a future n8n release could change it.
 
 ## How fields map to the UI
 
 - **Active**: `active`.
-- **Published** (n8n 2.x): `activeVersionId` set → Published; differs from `versionId` → Unpublished changes; null → Not published. On older n8n without `activeVersionId`, Active is the published state and no badge is shown.
-- **Owner**: owning project from `shared[]` (or `homeProject`). The API does not say who created a workflow.
-- **Status**: execution `status` (`crashed` counted as failed); older versions fall back to `finished`/`stoppedAt`.
+- **Published** (n8n 2.x): `activeVersionId` set → Published; differs from `versionId` → Unpublished changes; null → Not published.
+- **Owner**: owning project (`homeProject` / `shared`). **Created by**: authors of the oldest saved version, if it dates from when the workflow was created.
+- **Status**: execution `status` (`crashed` counted as failed).
 - **Duration**: `stoppedAt − startedAt`.
-
-## Limits
-
-- No API endpoint starts a workflow by ID, so the app needs a Webhook trigger to run one.
-- No API endpoint lists past workflow versions; the History tab links to n8n's own history page.
-- Stats only cover executions n8n still keeps (see `EXECUTIONS_DATA_MAX_AGE` / pruning settings) and the sample size set in the app.

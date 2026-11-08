@@ -22,11 +22,22 @@ More docs: [Android APK](docs/android.md) · [Deployment](docs/deployment.md) ·
 
 ## How you sign in
 
-n8n's public API uses an **API key** (not email/password). In n8n go to **Settings → n8n API → Create an API key**, then paste your n8n URL and the key into the app. The key is stored only on your phone (uncheck "Keep me signed in" to forget it when the browser closes).
+Just like n8n in a browser:
+
+1. Enter your n8n address (the public link you open n8n with) and tap **Continue**. The app checks it really is n8n.
+2. If your server or reverse proxy asks for its own password before n8n (HTTP basic auth), the app asks for that next.
+3. Sign in with your n8n **email and password** (or LDAP username, if your n8n uses LDAP).
+4. If your account has **two-step verification**, enter the 6-digit code from your authenticator app (or a recovery code).
+
+The app keeps n8n's normal sign-in session (about a week, set by n8n) and never stores your n8n password. Single sign-on pages (SAML/OIDC) and sign-in pages in front of n8n such as Cloudflare Access or Authelia aren't supported yet.
+
+## In-app updates (Android)
+
+Every change merged to `main` is built by GitHub Actions and published as the rolling [`android` release](https://github.com/0XZEROX0/n8n-app/releases/tag/android). The app checks it when it opens and shows **An update is out** with what changed; tap **Update now** and it downloads the new APK and opens Android's installer. You can also check any time under **Settings → App → Check for updates**. The first time, Android asks you to allow installs from n8n Mobile.
 
 ## Android APK (easiest)
 
-Download `n8n-mobile-<version>.apk` from the [latest release](https://github.com/0XZEROX0/n8n-app/releases/latest), open it on your phone, and allow the install. The APK connects to n8n directly, so no server or CORS setup is needed. Details and signing: [docs/android.md](docs/android.md).
+Download [`n8n-mobile.apk`](https://github.com/0XZEROX0/n8n-app/releases/download/android/n8n-mobile.apk), open it on your phone, and allow the install. The APK connects to n8n directly, so no server or CORS setup is needed. Details and signing: [docs/android.md](docs/android.md).
 
 ## Running it as a web app (next to your n8n)
 
@@ -68,7 +79,9 @@ server {
 
 Open `https://mobile.example.com` in Chrome → menu ⋮ → **Install app** (or "Add to Home screen"). It opens full-screen like a normal app.
 
-### Option C: static hosting, no server (advanced)
+### Option C: static hosting, no server (not for sign-in)
+
+Signing in uses n8n's session cookie, which browsers won't send to another site, so the web version needs `server.js` (or the Android app). The notes below only matter if you host n8n and the app on the same domain yourself.
 
 You can host the `public/` folder anywhere static (GitHub Pages, Netlify…). The browser then calls n8n directly, so your n8n reverse proxy must send CORS headers for `/api/` and `/webhook/`, for example in nginx:
 
@@ -85,15 +98,15 @@ location ~ ^/(api|webhook)/ {
 ## Security notes
 
 - `server.js` only forwards to the single `N8N_URL` you set. It does not store anything. (`ALLOW_ANY_TARGET=1` lets the app choose the URL, which makes it an open proxy; only use that on a private network.)
-- Your API key has full access to n8n. Treat your phone like any device that's signed in to n8n. You can revoke the key in n8n at any time.
+- Your phone holds a normal n8n session, like a signed-in browser. Signing out in the app (Settings) ends it. Your n8n password is never stored.
 
-## Known limits of n8n's API (v1)
+## Good to know
 
-- **Running a workflow**: the API has no "execute" endpoint, so the app runs workflows through their **Webhook** trigger. Add a Webhook trigger (and activate the workflow) to run it from the phone.
-- **Edit history**: the API exposes the current version and the published version, not the full list of past versions. The History tab links to n8n's version history page.
-- **Creator**: the API returns the owning project (shown as owner), not who originally created the workflow.
+- **Running a workflow**: **Run now** starts workflows with a Manual, Schedule or similar trigger, like pressing *Execute workflow* in n8n (it runs the latest saved version). Webhook workflows are run by calling their webhook; Form triggers open the form.
+- **Edit history**: the History tab lists every saved version with who saved it. n8n keeps history for a limited time on the free plan, so very old versions may be gone.
+- **Created by** is the author of the first saved version, when n8n still keeps it. **Owner** is the project that owns the workflow.
 - **Stats** are computed from the most recent N executions n8n still keeps (default 500, change in Settings). n8n prunes old executions on its own schedule.
-- **Retry** needs a recent n8n version.
+- The app uses n8n's own signed-in API (the one the n8n editor uses). It's tested with n8n 2.46; if a future n8n changes it, an app update will follow.
 
 ## Files
 
@@ -108,5 +121,6 @@ public/manifest.webmanifest, public/icons/
 capacitor.config.json  Android wrapper settings (Capacitor, native HTTP)
 android/             Android Studio project for the APK
 assets/              icon and splash sources for the APK
-.github/workflows/android.yml   builds the APK and attaches it to releases
+.github/workflows/android.yml   builds the APK, publishes the rolling "android" release
+scripts/release-notes.mjs       writes that release's "what changed" notes
 ```

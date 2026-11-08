@@ -15,11 +15,18 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The release notes list the changes since the last release.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v5
         with:
@@ -37,6 +44,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # The app compares this build number with the "android" release to offer updates.
+      - name: Stamp build number
+        run: |
+          echo '{"build": ${{ github.run_number }}, "sha": "${{ github.sha }}"}' > public/build.json
 
       - name: Copy web app into the Android project
         run: npx cap sync android
@@ -78,6 +90,25 @@ jobs:
         with:
           name: n8n-mobile-apk
           path: dist/*.apk
+
+      # main always replaces one rolling release, so the download link never changes:
+      # https://github.com/0XZEROX0/n8n-app/releases/download/android/n8n-mobile.apk
+      # The app's "Check for updates" reads it (public/app.js).
+      - name: Publish rolling "android" release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp dist/*.apk "$RUNNER_TEMP/n8n-mobile.apk"
+          PREV_BODY=$(gh release view android --json body -q .body 2>/dev/null || true)
+          PREV_SHA=$(printf '%s' "$PREV_BODY" | sed -n 's/^Commit: //p' | head -1)
+          PREV_BODY="$PREV_BODY" PREV_SHA="$PREV_SHA" BUILD=${{ github.run_number }} SHA=${{ github.sha }} \
+            node scripts/release-notes.mjs > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+          gh release delete android --yes --cleanup-tag || true
+          gh release create android "$RUNNER_TEMP/n8n-mobile.apk" \
+            --title "n8n Mobile for Android (build ${{ github.run_number }})" \
+            --notes-file "$RUNNER_TEMP/notes.md" --target "${{ github.sha }}" --latest
 
       - name: Attach APK to release
         if: steps.ver.outputs.tag != ''

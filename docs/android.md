@@ -2,13 +2,15 @@
 
 Besides the installable web app (PWA), n8n Mobile ships as a normal Android app (APK) you can sideload.
 
-**The APK talks to n8n directly** using Android's own networking, so you do **not** need `server.js`, Docker or any CORS setup. Just install it, enter your n8n URL and API key.
+**The APK talks to n8n directly** using Android's own networking, so you do **not** need `server.js`, Docker or any CORS setup. Install it, enter your n8n address, and sign in with your n8n email and password.
 
 ## Install
 
-1. On your phone, open the [latest release](https://github.com/0XZEROX0/n8n-app/releases/latest) and download `n8n-mobile-<version>.apk`.
+1. On your phone, download [n8n-mobile.apk](https://github.com/0XZEROX0/n8n-app/releases/download/android/n8n-mobile.apk) (always the newest build).
 2. Open the file. Android will ask you to allow installs from your browser or Files app: allow it once.
-3. Open **n8n Mobile**, enter `https://your-n8n-domain` and your API key (n8n → Settings → n8n API).
+3. Open **n8n Mobile**, enter `https://your-n8n-domain`, tap Continue, and sign in.
+
+After that you never need to download it again: the app updates itself (see below).
 
 Your n8n must be reachable from the phone over **HTTPS** (Android blocks plain `http://` by default).
 
@@ -18,32 +20,27 @@ The app is wrapped with [Capacitor](https://capacitorjs.com/):
 
 - `capacitor.config.json` points Capacitor at `public/` and turns on `CapacitorHttp`, which routes `fetch` through native HTTP (no CORS).
 - `android/` is the generated Android Studio project. Icons and splash screens come from `assets/` (regenerate with `npm run android:assets`).
-- `.github/workflows/android.yml` builds the APK on every push and pull request (download it from the run's *Artifacts*), and when a release is **published** it attaches the APK to that release.
+- `.github/workflows/android.yml` builds the APK on every push and pull request (download it from the run's *Artifacts*). Every push to `main` also replaces the rolling **`android`** release with the new `n8n-mobile.apk`, titled with its build number, and with notes listing what changed (`scripts/release-notes.mjs`). Publishing a versioned release (e.g. `v0.2.0`) also attaches the APK to it.
+- To attach an APK to an older release, open **Actions → Android APK → Run workflow** and type its tag.
 
-To attach an APK to a release that already exists, open **Actions → Android APK → Run workflow** and type the tag (e.g. `v0.1.0`).
+## In-app updates
 
-## Signing key (recommended)
+CI stamps the build number into `public/build.json`. When the app opens (and when you come back to it) it reads the `android` release from GitHub; if its build is newer, it shows **An update is out** with the changes. **Update now** downloads the APK inside the app and opens Android's installer (`AppUpdaterPlugin.java`, the same approach as Monthly Budget). The first time, Android asks you to allow installs from n8n Mobile: turn it on and come back, and the install continues.
 
-Android only installs an update over an existing app if both are signed with the same key. Without your own key, CI signs each build with a throwaway debug key, so to update you'd have to uninstall first.
+## Signing key
 
-Create a key once (keep the file and passwords safe, you can't recover them):
+Android only installs an update over the app if both are signed with the same key. Builds are signed with `android/app/shared-debug.keystore`, committed to the repo, so every build has the same signature and updates install over the top.
+
+Anyone who can read the repo could sign an APK with that key. If that matters to you, use your own key instead (you'll need to uninstall once when switching):
 
 ```bash
-keytool -genkeypair -v -keystore n8n-mobile.jks -alias n8n-mobile \
-  -keyalg RSA -keysize 2048 -validity 10000
+keytool -genkeypair -v -keystore n8n-mobile.jks -alias n8n-mobile -keyalg RSA -keysize 2048 -validity 10000
 base64 -w0 n8n-mobile.jks > n8n-mobile.jks.b64    # macOS: base64 -i n8n-mobile.jks
 ```
 
-Then in GitHub → **Settings → Secrets and variables → Actions**, add:
+Then add these in GitHub → **Settings → Secrets and variables → Actions**: `ANDROID_KEYSTORE_BASE64` (contents of the .b64 file), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`n8n-mobile`), `ANDROID_KEY_PASSWORD`.
 
-| Secret | Value |
-| --- | --- |
-| `ANDROID_KEYSTORE_BASE64` | contents of `n8n-mobile.jks.b64` |
-| `ANDROID_KEYSTORE_PASSWORD` | the keystore password |
-| `ANDROID_KEY_ALIAS` | `n8n-mobile` |
-| `ANDROID_KEY_PASSWORD` | the key password (same as keystore password if you didn't set one) |
-
-The first APK signed with your key needs one uninstall of any debug-signed version; after that, updates install over the top.
+**Upgrading from v0.1.0:** that APK was signed with a one-off key, so uninstall it once and install the new one. From then on, updates install from inside the app.
 
 ## Build locally
 
