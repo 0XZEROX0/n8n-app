@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- Sign in like n8n itself: enter the address, tap Continue, then email and password. Asks for a two-step verification code (or recovery code) and for a server password (basic auth in front of n8n) when needed. No API key any more.
+- Uses n8n's signed-in API, which adds: **Run now** for Manual/Schedule workflows, the full **edit history** with who saved each version, and **Created by**.
+- In-app updates on Android: every build of `main` is published as the rolling `android` release; the app offers it with what changed and installs it without a browser.
+- APKs are signed with a committed key, so updates install over the top.
+
 ## 0.1.0 (2026-11-07)
 
 First version.

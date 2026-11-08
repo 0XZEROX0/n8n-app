@@ -66,11 +66,19 @@ function proxy(req, res) {
   delete headers.host; delete headers['x-n8n-target']; delete headers.origin; delete headers.referer;
   delete headers.cookie; delete headers.connection;
   headers.host = target.host;
+  // Pass only n8n's own session cookie through (set when you sign in with email + password).
+  const auth = (req.headers.cookie || '').split(/;\s*/).filter((c) => c.startsWith('n8n-auth='));
+  if (auth.length) headers.cookie = auth.join('; ');
+  const secure = req.socket.encrypted || /https/i.test(String(req.headers['x-forwarded-proto'] || ''));
 
   const lib = target.protocol === 'https:' ? https : http;
   const upstream = lib.request(target, { method: req.method, headers }, (up) => {
     const h = { ...up.headers };
-    delete h['set-cookie'];
+    // Keep n8n's session cookie on this app's own address: drop its Domain, and its Secure
+    // flag when the app itself is served over plain http (e.g. on your LAN).
+    const cookies = [].concat(h['set-cookie'] || []).filter((c) => /^n8n-auth=/.test(c))
+      .map((c) => c.replace(/;\s*Domain=[^;]*/i, '').replace(secure ? /$^/ : /;\s*Secure/i, ''));
+    if (cookies.length) h['set-cookie'] = cookies; else delete h['set-cookie'];
     res.writeHead(up.statusCode || 502, h);
     up.pipe(res);
   });

@@ -68,69 +68,134 @@ const store = {
 // ---------- state ----------
 const S = {
   cfg: { proxy: false, n8nUrl: null, allowAnyTarget: false }, // from /app-config.json when served by server.js
-  conn: store.get('n8n.conn', null), // { url, apiKey, remember, viaProxy }
+  // Signed-in server: { url, viaProxy, email, name, basic }. `basic` is base64 "user:pass" for a
+  // password your reverse proxy asks for in front of n8n. n8n's own session is a cookie.
+  conn: store.get('n8n.conn', null),
   prefs: store.get('n8n.prefs', { sample: 500 }),
+  login: null, // sign-in flow: { step: 'url' | 'server' | 'signin' | 'mfa', url, email, password, info, error }
   tab: 'overview',
   workflows: [], executions: [], loading: false, loadedAt: null, error: null,
   wfFilter: 'all', wfQuery: '', exFilter: 'all',
 };
+// n8n ties its session cookie to a per-device id sent in the "browser-id" header.
+const BROWSER_ID = (() => {
+  let id = store.get('n8n.browserId', null);
+  if (!id) { id = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now()); store.set('n8n.browserId', id); }
+  return id;
+})();
 
 // ---------- API ----------
-class ApiError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
+// Uses n8n's own signed-in API (/rest), the same one the n8n editor uses, so it works with
+// your email and password and can show edit history and run any workflow.
+class ApiError extends Error { constructor(msg, status, code) { super(msg); this.status = status; this.code = code; } }
 
-function baseUrl() { return (S.conn?.url || '').replace(/\/+$/, ''); }
-function reqUrl(path, query) {
-  const qs = query ? '?' + new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString() : '';
-  return (S.conn?.viaProxy ? '/n8n' : baseUrl()) + path + (qs === '?' ? '' : qs);
+function baseUrl(conn = S.conn) { return (conn?.url || '').replace(/\/+$/, ''); }
+function reqUrl(path, query, conn = S.conn) {
+  const qs = query ? new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : String(v)])).toString() : '';
+  return (conn?.viaProxy ? '/n8n' : baseUrl(conn)) + path + (qs ? '?' + qs : '');
 }
-async function rawFetch(path, { method = 'GET', query, body, headers = {}, apiKey = true } = {}) {
-  const h = { Accept: 'application/json', ...headers };
-  if (apiKey) h['X-N8N-API-KEY'] = S.conn.apiKey;
-  if (S.conn?.viaProxy && S.cfg.allowAnyTarget) h['X-N8N-Target'] = baseUrl();
+async function rawFetch(path, { method = 'GET', query, body, headers = {}, conn = S.conn } = {}) {
+  const h = { Accept: 'application/json', 'browser-id': BROWSER_ID, ...headers };
+  if (conn?.basic && !h.Authorization) h.Authorization = 'Basic ' + conn.basic;
+  if (conn?.viaProxy && S.cfg.allowAnyTarget) h['X-N8N-Target'] = baseUrl(conn);
   let payload = body;
   if (body !== undefined && typeof body !== 'string') { payload = JSON.stringify(body); h['Content-Type'] = 'application/json'; }
-  let res;
   try {
-    res = await fetch(reqUrl(path, query), { method, headers: h, body: payload });
+    return await fetch(reqUrl(path, query, conn), { method, headers: h, body: payload, credentials: 'include' });
   } catch (e) {
     throw new ApiError(IS_NATIVE
-      ? 'Could not reach n8n. Check the URL (it must start with https://) and that this phone can reach your server.'
-      : S.conn?.viaProxy
+      ? 'Could not reach n8n. Check the address (it must start with https://) and that this phone can reach your server.'
+      : conn?.viaProxy
       ? 'Could not reach the app server. Is server.js running?'
-      : 'Could not reach n8n. This is usually CORS: the browser blocked the request. Run the app through server.js (see README) or add CORS headers on your reverse proxy.', 0);
+      : 'Could not reach n8n from this browser. Use the Android app, or run the web app through server.js (see README).', 0);
   }
-  return res;
 }
-async function api(path, opts) {
-  const res = await rawFetch('/api/v1' + path, opts);
+async function readBody(res) {
   const text = await res.text();
-  let data = null; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  try { return text ? JSON.parse(text) : null; } catch { return text; }
+}
+async function api(path, opts = {}) {
+  const res = await rawFetch('/rest' + path, opts);
+  const data = await readBody(res);
   if (!res.ok) {
-    let msg = (data && data.message) || `HTTP ${res.status}`;
-    if (res.status === 401) msg = 'API key rejected (401). Check the key in n8n → Settings → n8n API.';
-    if (res.status === 403) msg = (data && data.message) || 'Forbidden (403). Your API key may lack this permission/scope.';
-    if (res.status === 404 && path.startsWith('/workflows?')) msg = 'n8n public API not found (404). Is the URL right and is the API enabled?';
-    throw new ApiError(msg, res.status);
+    const msg = (data && typeof data === 'object' && data.message) || `HTTP ${res.status}`;
+    const code = data && typeof data === 'object' ? data.code : undefined;
+    if (res.status === 401 && !opts.noSignOut && S.conn) { sessionEnded(); throw new ApiError('Your n8n session ended. Sign in again.', 401, code); }
+    throw new ApiError(msg, res.status, code);
   }
-  return data;
+  return data && typeof data === 'object' && 'data' in data ? data.data : data;
 }
-async function paged(path, query, max = Infinity) {
-  const out = []; let cursor;
-  do {
-    const page = await api(path, { query: { ...query, cursor } });
-    out.push(...(page.data || []));
-    cursor = page.nextCursor;
-  } while (cursor && out.length < max);
-  return out.slice(0, max);
+
+// n8n stores execution details in "flatted" form (JSON that can hold repeated references).
+function unflatten(text) {
+  const wrap = JSON.parse(text, (_k, v) => (typeof v === 'string' ? new String(v) : v));
+  const input = wrap.map((v) => (v instanceof String ? String(v) : v));
+  const seen = new Set();
+  const revive = (obj) => {
+    for (const k of Object.keys(obj)) {
+      const v = obj[k];
+      if (v instanceof String) {
+        const ref = input[+v];
+        if (ref && typeof ref === 'object' && !seen.has(ref)) { seen.add(ref); obj[k] = revive(ref); } else obj[k] = ref;
+      }
+    }
+    return obj;
+  };
+  const root = input[0];
+  return root && typeof root === 'object' ? (seen.add(root), revive(root)) : root;
 }
+
+const WF_FIELDS = ['id', 'name', 'active', 'activeVersionId', 'versionId', 'isArchived', 'createdAt', 'updatedAt', 'tags', 'nodes', 'ownedBy', 'description'];
 const API = {
-  workflows: () => paged('/workflows', { limit: 100 }),
+  settings: (conn) => rawFetch('/rest/settings', { conn }),
+  me: () => api('/login', { noSignOut: true }),
+  login: (conn, body) => rawFetch('/rest/login', { method: 'POST', body, conn }),
+  logout: () => api('/logout', { method: 'POST', noSignOut: true }),
+  async workflows() {
+    const out = [];
+    for (let skip = 0; ; skip += 100) {
+      const res = await rawFetch('/rest/workflows', { query: { select: WF_FIELDS, skip, take: 100 } });
+      if (res.status === 400) return api('/workflows'); // older n8n without "select": plain list
+      const page = await readBody(res);
+      if (!res.ok) { if (res.status === 401) sessionEnded(); throw new ApiError(page?.message || `HTTP ${res.status}`, res.status); }
+      const rows = Array.isArray(page?.data) ? page.data : [];
+      out.push(...rows);
+      if (rows.length < 100 || (page.count != null && out.length >= page.count)) return out;
+    }
+  },
   workflow: (id) => api(`/workflows/${encodeURIComponent(id)}`),
-  activate: (id) => api(`/workflows/${encodeURIComponent(id)}/activate`, { method: 'POST' }),
-  deactivate: (id) => api(`/workflows/${encodeURIComponent(id)}/deactivate`, { method: 'POST' }),
-  executions: (q, max) => paged('/executions', { limit: Math.min(250, max || 100), ...q }, max || 100),
-  execution: (id) => api(`/executions/${encodeURIComponent(id)}`, { query: { includeData: true } }),
+  async setActive(wf, on) {
+    const id = encodeURIComponent(wf.id);
+    try {
+      return await api(`/workflows/${id}/${on ? 'activate' : 'deactivate'}`, { method: 'POST', body: on ? { versionId: wf.versionId } : {} });
+    } catch (e) {
+      if (e.status !== 404) throw e;
+      // Older n8n: the switch is a field on the workflow.
+      return api(`/workflows/${id}`, { method: 'PATCH', body: { active: on, versionId: wf.versionId } });
+    }
+  },
+  async executions(filter = {}, max = 100) {
+    const out = []; let lastId;
+    while (out.length < max) {
+      const want = Math.min(100, max - out.length);
+      const page = await api('/executions', { query: { filter, limit: want, lastId } });
+      const rows = page?.results || (Array.isArray(page) ? page : []);
+      out.push(...rows);
+      if (rows.length < want) break;
+      lastId = rows[rows.length - 1].id; // next page: older than this one
+    }
+    return out;
+  },
+  async execution(id) {
+    const ex = await api(`/executions/${encodeURIComponent(id)}`);
+    if (ex && typeof ex.data === 'string') { try { ex.data = unflatten(ex.data); } catch { ex.data = null; } }
+    return ex;
+  },
   retry: (id) => api(`/executions/${encodeURIComponent(id)}/retry`, { method: 'POST', body: { loadWorkflow: true } }),
+  // Same as pressing "Execute workflow" in the editor, starting from the given trigger.
+  run: (wf, triggerName) => api(`/workflows/${encodeURIComponent(wf.id)}/run`, { method: 'POST', body: { workflowData: wf, triggerToStartFrom: { name: triggerName } } }),
+  history: (id) => api(`/workflow-history/workflow/${encodeURIComponent(id)}`, { query: { take: 50, skip: 0 } }),
 };
 
 // ---------- domain helpers ----------
@@ -146,7 +211,7 @@ const STATUS_UI = {
 };
 const statusBadge = (s) => { const [l, c] = STATUS_UI[s] || STATUS_UI.unknown; return `<span class="badge ${c}"><span class="dot"></span>${l}</span>`; };
 
-function wfName(id) { return S.workflows.find((w) => String(w.id) === String(id))?.name || `Workflow ${id}`; }
+function wfName(id) { return S.workflows.find((w) => String(w.id) === String(id))?.name || S.executions.find((e) => String(e.workflowId) === String(id))?.workflowName || `Workflow ${id}`; }
 function owner(wf) {
   const sh = Array.isArray(wf.shared) ? wf.shared : [];
   const own = sh.find((s) => /owner/i.test(s.role || '')) || sh[0];
@@ -358,42 +423,142 @@ function bindView() {
 }
 
 // ---------- login ----------
-function renderLogin(err) {
+// Steps: url → (server password, if a proxy in front of n8n asks) → email + password → (2FA code).
+function cleanUrl(u) {
+  u = String(u || '').trim().replace(/\/+$/, '').replace(/\/(home\/workflows|signin|api\/v1|rest)$/, '');
+  if (u && !/^https?:\/\//i.test(u)) u = 'https://' + u;
+  return u;
+}
+function renderLogin() {
+  const L = S.login || (S.login = { step: 'url', url: (S.cfg.proxy && S.cfg.n8nUrl) || store.get('n8n.lastUrl', ''), email: store.get('n8n.lastEmail', '') });
   const fixed = S.cfg.proxy && S.cfg.n8nUrl;
-  const prev = store.get('n8n.lastUrl', '');
+  const host = L.url.replace(/^https?:\/\//, '');
+  const back = `<button type="button" class="btn block" id="login-back" style="margin-top:8px">Back</button>`;
+  let body = '';
+  if (L.step === 'url') body = `
+    <form id="login-form" autocomplete="on">
+      <label class="field"><span>n8n address</span>
+        <input class="input" name="url" type="url" inputmode="url" autocapitalize="off" placeholder="https://n8n.example.com" required
+          value="${esc(L.url)}" ${fixed ? 'readonly' : 'autofocus'}></label>
+      <p class="help" style="margin-top:-6px">The public link you open n8n with in a browser.</p>
+      <button class="btn primary block" type="submit">Continue</button>
+    </form>
+    ${!IS_NATIVE && !S.cfg.proxy ? '<div class="alert warn" style="margin-top:14px">In a browser, signing in needs the app server (server.js). The Android app works on its own.</div>' : ''}`;
+  if (L.step === 'server') body = `
+    <div class="alert info">${esc(host)} is protected by a password before n8n opens (set on your server or reverse proxy). Enter that first.</div>
+    <form id="login-form" autocomplete="on">
+      <label class="field"><span>Server username</span><input class="input" name="user" autocapitalize="off" required autocomplete="username"></label>
+      <label class="field"><span>Server password</span><input class="input" name="pass" type="password" required autocomplete="current-password"></label>
+      <button class="btn primary block" type="submit">Continue</button>${back}
+    </form>`;
+  if (L.step === 'signin') body = `
+    <p class="help" style="margin-top:0">Signing in to <b>${esc(host)}</b>${L.info?.version ? ` · n8n ${esc(L.info.version)}` : ''}</p>
+    ${L.info?.ssoOnly ? '<div class="alert warn">This n8n is set up for single sign-on. If your account also has an n8n password (the owner account always does), use it here.</div>' : ''}
+    <form id="login-form" autocomplete="on">
+      <label class="field"><span>${L.info?.ldap ? 'Email or LDAP username' : 'Email'}</span>
+        <input class="input" name="email" type="${L.info?.ldap ? 'text' : 'email'}" autocapitalize="off" required autocomplete="username" value="${esc(L.email)}" ${L.email ? '' : 'autofocus'}></label>
+      <label class="field"><span>Password</span><input class="input" name="password" type="password" required autocomplete="current-password" ${L.email ? 'autofocus' : ''}></label>
+      <button class="btn primary block" type="submit">Sign in</button>${fixed && !L.basic ? '' : back}
+    </form>`;
+  if (L.step === 'mfa') body = `
+    <div class="alert info">Your account uses two-step verification. Enter the 6-digit code from your authenticator app.</div>
+    <form id="login-form" autocomplete="off">
+      <label class="field"><span>Verification code</span>
+        <input class="input mono" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="${L.recovery ? 64 : 6}" required autofocus
+          placeholder="${L.recovery ? 'Recovery code' : '123456'}"></label>
+      <button class="btn primary block" type="submit">Verify</button>
+      <button type="button" class="btn block" id="login-recovery" style="margin-top:8px">${L.recovery ? 'Use a 6-digit code instead' : 'Use a recovery code instead'}</button>
+      ${back}
+    </form>`;
   app.innerHTML = `
   <div class="login">
     <div class="brand"><img src="icons/icon.svg" alt=""><div><h1>n8n Mobile</h1><p>Your workflows, in your pocket</p></div></div>
-    ${err ? `<div class="alert bad">${esc(err)}</div>` : ''}
-    ${S.cfg.proxy ? `<div class="alert info">Connected through the app server, so CORS is not a problem.</div>` : ''}
-    <form id="login" autocomplete="on">
-      <label class="field"><span>n8n URL</span>
-        <input class="input" name="url" type="url" inputmode="url" placeholder="https://n8n.example.com" required
-          value="${esc(fixed ? S.cfg.n8nUrl : prev)}" ${fixed ? 'readonly' : ''}></label>
-      <label class="field"><span>API key</span>
-        <input class="input" name="apiKey" type="password" placeholder="Paste your n8n API key" required autocomplete="current-password"></label>
-      <label class="check"><input type="checkbox" name="remember" checked> Keep me signed in on this device</label>
-      <button class="btn primary block" type="submit" id="login-btn">Connect</button>
-    </form>
-    <div class="card help" style="margin-top:18px">
-      <b>Where do I get an API key?</b>
-      <ol><li>Open n8n in a browser and sign in.</li><li>Go to <b>Settings → n8n API</b>.</li><li>Click <b>Create an API key</b>, copy it, and paste it here.</li></ol>
-      The key stays on this device and is only sent to your n8n server.
-    </div>
+    ${L.error ? `<div class="alert bad">${esc(L.error)}</div>` : ''}
+    ${body}
   </div>`;
-  $('#login').onsubmit = async (ev) => {
+  const go = (patch) => { Object.assign(L, patch); renderLogin(); };
+  const b = $('#login-back');
+  if (b) b.onclick = () => go({ step: L.step === 'mfa' ? 'signin' : L.step === 'signin' && L.basic ? 'server' : 'url', error: null });
+  const rc = $('#login-recovery'); if (rc) rc.onclick = () => go({ recovery: !L.recovery, error: null });
+  const form = $('#login-form');
+  form.onsubmit = async (ev) => {
     ev.preventDefault();
-    const fd = new FormData(ev.target);
-    const url = String(fd.get('url')).trim().replace(/\/+$/, '').replace(/\/(home\/workflows|api\/v1)$/, '');
-    const conn = { url, apiKey: String(fd.get('apiKey')).trim(), remember: !!fd.get('remember'), viaProxy: S.cfg.proxy };
-    const btn = $('#login-btn'); btn.disabled = true; btn.textContent = 'Connecting…';
-    S.conn = conn;
+    const fd = new FormData(form); const btn = form.querySelector('[type=submit]');
+    const label = btn.textContent; btn.disabled = true; btn.textContent = 'Please wait…';
     try {
-      await api('/workflows', { query: { limit: 1 } });
-      store.set('n8n.conn', conn, conn.remember); store.set('n8n.lastUrl', url);
-      render(); loadAll();
-    } catch (e) { S.conn = null; renderLogin(e.message); }
+      if (L.step === 'url') {
+        L.url = cleanUrl(fd.get('url')); L.basic = null;
+        await probe(L);
+      } else if (L.step === 'server') {
+        L.basic = btoa(unescape(encodeURIComponent(`${fd.get('user')}:${fd.get('pass')}`)));
+        await probe(L);
+      } else if (L.step === 'signin') {
+        L.email = String(fd.get('email')).trim(); L.password = String(fd.get('password'));
+        await signIn(L, {});
+      } else if (L.step === 'mfa') {
+        const code = String(fd.get('code')).replace(/\s+/g, '');
+        await signIn(L, L.recovery ? { mfaRecoveryCode: code } : { mfaCode: code });
+      }
+    } catch (e) { L.error = e.message; }
+    if (S.login) renderLogin(); else { btn.disabled = false; btn.textContent = label; }
   };
+}
+
+// Checks the address really is n8n, and whether something in front of it wants a password.
+async function probe(L) {
+  const conn = { url: L.url, viaProxy: S.cfg.proxy, basic: L.basic };
+  const res = await API.settings(conn);
+  const data = await readBody(res);
+  if (res.status === 401) {
+    if (L.step === 'server') throw new Error('That server username or password was not accepted.');
+    Object.assign(L, { step: 'server', error: null }); return;
+  }
+  const st = data && typeof data === 'object' ? data.data || data : null;
+  if (!res.ok || !st || !st.userManagement) {
+    if (typeof data === 'string' && /<html/i.test(data)) {
+      throw new Error(`${L.url} answered with a web page instead of n8n. If your server shows its own sign-in page before n8n (like Cloudflare Access or Authelia), this app can't get past it yet. Otherwise check the address.`);
+    }
+    throw new Error(res.status === 404 ? `No n8n found at ${L.url}. Check the address.` : `${L.url} did not answer like n8n (HTTP ${res.status}).`);
+  }
+  const um = st.userManagement || {}; const sso = st.sso || {};
+  L.info = {
+    version: st.versionCli,
+    ldap: !!sso.ldap?.loginEnabled,
+    ssoOnly: ['saml', 'oidc'].includes(um.authenticationMethod),
+  };
+  Object.assign(L, { step: 'signin', error: null });
+}
+
+async function signIn(L, extra) {
+  const conn = { url: L.url, viaProxy: S.cfg.proxy, basic: L.basic };
+  const res = await API.login(conn, { emailOrLdapLoginId: L.email, password: L.password, ...extra });
+  const data = await readBody(res);
+  if (!res.ok) {
+    const code = data && typeof data === 'object' ? data.code : undefined;
+    if (code === 998) { Object.assign(L, { step: 'mfa', error: null }); return; } // two-step verification needed
+    if (res.status === 400 && data?.message && /emailOrLdapLoginId|email/.test(data.message)) {
+      // n8n older than ~1.80 calls the field "email".
+      const r2 = await API.login(conn, { email: L.email, password: L.password, ...extra });
+      if (r2.ok) return finishSignIn(L, conn, await readBody(r2));
+    }
+    if (L.step === 'mfa') throw new Error('That code was not accepted. Codes change every 30 seconds; try the newest one.');
+    throw new Error(res.status === 401 ? 'Wrong email or password.' : (data?.message || `Sign-in failed (HTTP ${res.status}).`));
+  }
+  finishSignIn(L, conn, data);
+}
+function finishSignIn(L, conn, data) {
+  const u = data?.data || data || {};
+  S.conn = { ...conn, email: u.email || L.email, name: [u.firstName, u.lastName].filter(Boolean).join(' ') };
+  store.set('n8n.conn', S.conn); store.set('n8n.lastUrl', L.url); store.set('n8n.lastEmail', L.email);
+  S.login = null; S.error = null;
+  render(); loadAll();
+}
+function sessionEnded() {
+  if (!S.conn) return;
+  S.login = { step: 'signin', url: S.conn.url, basic: S.conn.basic, email: S.conn.email || '', error: 'Your n8n session ended. Sign in again.' };
+  S.conn = null; store.del('n8n.conn'); S.workflows = []; S.executions = []; S.loadedAt = null;
+  while (sheetStack.length) { sheetStack.pop(); } closeSheet();
+  render();
 }
 
 // ---------- sheet ----------
@@ -423,15 +588,15 @@ const sheetHead = (title, extra = '') => `<div class="sheet-head"><h2>${title}</
 // ---------- workflow detail ----------
 async function openWorkflow(id, tab = 'details') {
   const cached = S.workflows.find((w) => String(w.id) === String(id));
-  let wf = cached; let runs = null; let runsErr = null;
-  const draw = () => openSheet('wf:' + id, sheetHead(esc(wf?.name || 'Workflow')) + `<div class="sheet-body">${wf ? wfDetailHtml(wf, tab, runs, runsErr) : '<div class="skeleton"></div>'}</div>`, (sh) => {
+  let wf = cached; let runs = null; let runsErr = null; let hist = null; let histErr = null;
+  const draw = () => openSheet('wf:' + id, sheetHead(esc(wf?.name || 'Workflow')) + `<div class="sheet-body">${wf ? wfDetailHtml(wf, tab, runs, runsErr, hist, histErr) : '<div class="skeleton"></div>'}</div>`, (sh) => {
     sh.querySelectorAll('[data-wtab]').forEach((b) => (b.onclick = () => { tab = b.dataset.wtab; draw(); if (tab === 'runs' && !runs) loadRuns(); }));
     sh.querySelectorAll('[data-ex]').forEach((b) => (b.onclick = () => openExecution(b.dataset.ex)));
     const tg = sh.querySelector('#wf-toggle');
     if (tg) tg.onclick = async () => {
       tg.disabled = true;
       try {
-        wf = { ...wf, ...(await (wf.active ? API.deactivate(wf.id) : API.activate(wf.id))) };
+        wf = { ...wf, ...(await API.setActive(wf, !wf.active)) };
         const i = S.workflows.findIndex((w) => String(w.id) === String(wf.id)); if (i >= 0) S.workflows[i] = wf;
         toast(wf.active ? 'Workflow activated' : 'Workflow deactivated'); draw(); render();
       } catch (e) { toast(e.message, true); tg.disabled = false; }
@@ -443,21 +608,27 @@ async function openWorkflow(id, tab = 'details') {
     if (sheetIsOpen('wf:' + id)) draw();
   };
   draw();
+  // Edit history also tells us who created the workflow (its oldest saved version).
+  API.history(id).then((h) => { hist = Array.isArray(h) ? h : []; }, (e) => { histErr = e.message; })
+    .then(() => { if (sheetIsOpen('wf:' + id)) draw(); });
   try { wf = await API.workflow(id); if (sheetIsOpen('wf:' + id)) draw(); } catch (e) { if (!wf) { toast(e.message, true); history.back(); } }
   if (tab === 'runs') loadRuns();
 }
 
-function wfDetailHtml(wf, tab, runs, runsErr) {
+function wfDetailHtml(wf, tab, runs, runsErr, hist, histErr) {
   const tabs = [['details', 'Details'], ['flow', 'Flow'], ['runs', 'Runs'], ['history', 'History']];
   let body = '';
-  if (tab === 'details') body = wfDetailsTab(wf);
+  if (tab === 'details') body = wfDetailsTab(wf, hist);
   if (tab === 'flow') body = wfFlowTab(wf);
   if (tab === 'runs') body = runs ? wfRunsTab(runs) : runsErr ? `<div class="alert bad">${esc(runsErr)}</div>` : '<div class="skeleton"></div>';
-  if (tab === 'history') body = wfHistoryTab(wf);
+  if (tab === 'history') body = wfHistoryTab(wf, hist, histErr);
   return `<div class="tabs">${tabs.map(([k, l]) => `<button data-wtab="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>${body}<div class="spacer"></div>`;
 }
 
-function wfDetailsTab(wf) {
+function wfDetailsTab(wf, hist) {
+  // Creator = author of the very first saved version, if n8n still keeps it.
+  const first = hist && hist.length ? hist[hist.length - 1] : null;
+  const creator = first && Math.abs(new Date(first.createdAt) - new Date(wf.createdAt)) < 120000 ? first.authors : null;
   const pub = publishState(wf); const st = wfRunStats(wf.id); const trg = triggers(wf);
   const s = wf.settings || {};
   return `
@@ -473,7 +644,9 @@ function wfDetailsTab(wf) {
     <div class="section-title">Details</div>
     <div class="card"><dl class="kv">
       <dt>ID</dt><dd class="mono">${esc(wf.id)}</dd>
-      <dt>Owner</dt><dd>${esc(owner(wf) || 'Not shown by API')}</dd>
+      <dt>Owner</dt><dd>${esc(owner(wf) || '–')}</dd>
+      <dt>Created by</dt><dd>${hist ? esc(creator || 'Not kept by n8n') : '…'}</dd>
+      ${wf.description ? `<dt>Description</dt><dd style="word-break:normal">${esc(wf.description)}</dd>` : ''}
       <dt>Created</dt><dd>${fmtDate(wf.createdAt)}</dd>
       <dt>Last edited</dt><dd>${fmtDate(wf.updatedAt)}</dd>
       <dt>Nodes</dt><dd>${(wf.nodes || []).length}</dd>
@@ -517,23 +690,35 @@ function wfRunsTab(runs) {
     <div class="list">${runs.map(exRow).join('')}</div>`;
 }
 
-function wfHistoryTab(wf) {
-  const pub = publishState(wf);
-  const events = [
-    wf.updatedAt && { t: wf.updatedAt, title: 'Last edited', meta: wf.versionId ? `Version ${wf.versionId}` : '' },
-    wf.activeVersionId && { t: null, title: pub?.label === 'Unpublished changes' ? 'Live version is older than the latest edit' : 'Latest edit is live', meta: `Published version ${wf.activeVersionId}` },
-    wf.createdAt && { t: wf.createdAt, title: 'Created', meta: owner(wf) ? `by ${owner(wf)}` : '' },
-  ].filter(Boolean);
-  return `<div class="list">${events.map((e) => `<div class="row" style="cursor:default"><div class="main"><div class="title">${esc(e.title)}</div><div class="meta mono">${esc(e.meta)}</div></div><div class="end">${e.t ? fmtDate(e.t) : ''}</div></div>`).join('')}</div>
-    <div class="alert warn" style="margin-top:12px">n8n's public API does not return the full list of past versions yet, so this shows the current and published version. The full edit history is in n8n.</div>
-    <a class="btn block" href="${esc(baseUrl())}/workflow/${encodeURIComponent(wf.id)}/history" target="_blank" rel="noopener">Open version history in n8n</a>`;
+function wfHistoryTab(wf, hist, histErr) {
+  const editor = `<a class="btn block" style="margin-top:12px" href="${esc(baseUrl())}/workflow/${encodeURIComponent(wf.id)}/history" target="_blank" rel="noopener">Open version history in n8n</a>`;
+  if (histErr) return `<div class="alert warn">Couldn't load the edit history (${esc(histErr)}).</div>${editor}`;
+  if (!hist) return '<div class="skeleton"></div>';
+  if (!hist.length) return `<div class="card empty">No saved versions yet.</div>${editor}`;
+  const live = wf.activeVersionId || (wf.active && !('activeVersionId' in wf) ? wf.versionId : null);
+  return `<p class="help">Every saved version, newest first. n8n keeps these for a limited time on the free plan.</p>
+  <div class="list">${hist.map((v, i) => {
+    const tags = [
+      v.versionId === wf.versionId ? '<span class="badge info">Current</span>' : '',
+      v.versionId === live ? '<span class="badge ok">Published</span>' : '',
+      i === hist.length - 1 ? '<span class="badge">Oldest kept</span>' : '',
+      v.autosaved ? '<span class="badge">Autosave</span>' : '',
+    ].join('');
+    return `<div class="row" style="cursor:default;align-items:flex-start"><div class="main">
+      <div class="title">${esc(v.name || v.authors || 'Unknown editor')}</div>
+      <div class="meta">${v.name && v.authors ? esc(v.authors) + ' · ' : ''}<span class="mono">${esc(String(v.versionId).slice(0, 8))}</span></div>
+      ${tags ? `<div class="badges" style="margin-top:6px">${tags}</div>` : ''}</div>
+      <div class="end">${fmtDate(v.createdAt)}<br>${ago(v.createdAt)}</div></div>`;
+  }).join('')}</div>${editor}`;
 }
 
 // ---------- run a workflow ----------
 function openRun(wf) {
   const hooks = (wf.nodes || []).filter((n) => n.type === 'n8n-nodes-base.webhook' && !n.disabled);
   const forms = (wf.nodes || []).filter((n) => n.type === 'n8n-nodes-base.formTrigger' && !n.disabled);
-  const other = triggers(wf).filter((n) => !hooks.includes(n) && !forms.includes(n));
+  // Triggers n8n can start on request, like pressing "Execute workflow" in the editor.
+  const LISTENING = /webhook|formTrigger|chatTrigger|errorTrigger|executeWorkflowTrigger|mcpTrigger/i;
+  const runnable = triggers(wf).filter((n) => !n.disabled && !LISTENING.test(n.type));
   let i = 0;
   const h = hooks[0] && webhookInfo(hooks[0]);
   const html = sheetHead('Run · ' + esc(wf.name)) + `<div class="sheet-body">
@@ -548,14 +733,33 @@ function openRun(wf) {
       <button class="btn primary block" id="r-go">${icon('play').replace('<svg', '<svg width="16" height="16"')} Send request</button>
       <div id="r-out" style="margin-top:12px"></div>` : ''}
     ${forms.length ? `<div class="section-title">Form trigger</div>${forms.map((n) => `<a class="btn block" style="margin-bottom:8px" target="_blank" rel="noopener" href="${esc(baseUrl())}/form/${esc(webhookInfo(n).path)}">Open form “${esc(n.name)}”</a>`).join('')}` : ''}
-    ${!hooks.length && !forms.length ? `<div class="alert info" style="margin-top:12px">
-        n8n's API can't start a workflow directly. To run this one from your phone, add a <b>Webhook</b> trigger to it in n8n and activate it. It will then show a Run button here.
-        ${other.length ? `<br><br>Current trigger${other.length > 1 ? 's' : ''}: ${other.map((n) => esc(triggerLabel(n))).join(', ')}.` : ''}</div>
+    ${runnable.length ? `
+      <div class="section-title">Run now</div>
+      ${runnable.length > 1 ? `<label class="field"><span>Start from</span><select class="input" id="r-trigger">${runnable.map((n) => `<option>${esc(n.name)}</option>`).join('')}</select></label>` : ''}
+      <p class="help" style="margin-top:0">Runs the latest saved version once, like pressing <b>Execute workflow</b> in n8n${runnable.length === 1 ? ` (starting from “${esc(runnable[0].name)}”)` : ''}.</p>
+      <button class="btn primary block" id="r-run">${icon('play').replace('<svg', '<svg width="16" height="16"')} Run now</button>
+      <div id="r-run-out" style="margin-top:12px"></div>` : ''}
+    ${!hooks.length && !forms.length && !runnable.length ? `<div class="alert info" style="margin-top:12px">
+        This workflow has no trigger that can be started from here${triggers(wf).length ? ` (it starts from: ${triggers(wf).map((n) => esc(triggerLabel(n))).join(', ')})` : ''}.</div>
       <a class="btn block" href="${esc(baseUrl())}/workflow/${encodeURIComponent(wf.id)}" target="_blank" rel="noopener">Open in n8n editor</a>` : ''}
     <div class="spacer"></div></div>`;
   openSheet('run:' + wf.id, html, (sh) => {
     const sel = sh.querySelector('#r-hook');
     if (sel) sel.onchange = () => { i = +sel.value; const x = webhookInfo(hooks[i]); sh.querySelector('#r-method').value = x.method; sh.querySelector('#r-path').value = x.path; };
+    const rr = sh.querySelector('#r-run');
+    if (rr) rr.onclick = async () => {
+      const out = sh.querySelector('#r-run-out'); const name = sh.querySelector('#r-trigger')?.value || runnable[0].name;
+      rr.disabled = true; out.innerHTML = '<div class="skeleton" style="height:50px"></div>';
+      try {
+        const full = wf.connections ? wf : await API.workflow(wf.id);
+        const r = await API.run(full, name);
+        const id = r?.executionId;
+        out.innerHTML = `<div class="alert info">Started${id ? ` as execution #${esc(id)}` : ''}.</div>`;
+        toast('Workflow started');
+        if (id) setTimeout(async () => { await loadAll(); openExecution(id); }, 1500); else setTimeout(loadAll, 1500);
+      } catch (e) { out.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; }
+      rr.disabled = false;
+    };
     const go = sh.querySelector('#r-go'); if (!go) return;
     go.onclick = async () => {
       const out = sh.querySelector('#r-out');
@@ -568,7 +772,7 @@ function openRun(wf) {
       go.disabled = true; out.innerHTML = '<div class="skeleton" style="height:60px"></div>';
       const t0 = performance.now();
       try {
-        const res = await rawFetch('/webhook/' + path, { method, body, headers, apiKey: false });
+        const res = await rawFetch('/webhook/' + path, { method, body, headers });
         const text = await res.text(); const ms = performance.now() - t0;
         let pretty = text; try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
         out.innerHTML = `<div class="alert ${res.ok ? 'info' : 'bad'}">HTTP ${res.status} · ${fmtDur(ms)}${res.status === 404 ? '<br>404 usually means the workflow is not active, or the path/method does not match.' : ''}</div>
@@ -634,6 +838,89 @@ function exDetailHtml(ex) {
     <div class="spacer"></div>`;
 }
 
+// ---------- in-app updates (Android) ----------
+// CI publishes every build of main as the rolling "android" release (see .github/workflows/android.yml).
+// The app compares its own build number (public/build.json, stamped by CI) with the release's,
+// downloads the new APK itself and hands it to Android's installer (AppUpdaterPlugin.java).
+const RELEASE_API = 'https://api.github.com/repos/0XZEROX0/n8n-app/releases/tags/android';
+let BUILD = 0; // 0 = local/dev build, which never offers updates
+const U = { state: 'idle', update: null, pct: null, message: '' }; // idle | checking | latest | available | downloading | allow | error
+
+async function loadBuild() {
+  try { const r = await fetch('build.json', { cache: 'no-store' }); if (r.ok) BUILD = Number((await r.json()).build) || 0; } catch {}
+}
+async function checkForUpdate() {
+  const res = await fetch(RELEASE_API, { headers: { Accept: 'application/vnd.github+json' } });
+  if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+  const rel = await res.json();
+  const build = Number(/build (\d+)/.exec(rel.name || '')?.[1] || 0);
+  const apk = (rel.assets || []).find((a) => a.name === 'n8n-mobile.apk');
+  if (!BUILD || !apk || build <= BUILD) return null;
+  // "- 12|Sign in with email and password": a change and the build that brought it.
+  const changes = [...String(rel.body || '').matchAll(/^- (\d+)\|(.+)$/gm)].filter((m) => Number(m[1]) > BUILD).map((m) => m[2].trim());
+  return { build, url: apk.browser_download_url, size: apk.size, changes };
+}
+const mb = (b) => `${(b / 1048576).toFixed(1)} MB`;
+
+function updateCardHtml(inPrompt) {
+  const u = U.update;
+  if (U.state === 'available') return `
+    <p>Build ${u.build} is ready (${mb(u.size)}); you have build ${BUILD}. Android will ask you to confirm the install.</p>
+    ${u.changes.length ? `<div class="card" style="margin:10px 0"><b>What's new</b><ul style="margin:6px 0 0;padding-left:18px">${u.changes.slice(0, 8).map((c) => `<li>${esc(c)}</li>`).join('')}</ul>${u.changes.length > 8 ? `<p class="help">and ${u.changes.length - 8} more</p>` : ''}</div>` : ''}
+    <div class="btn-row">${inPrompt ? '<button class="btn" data-close>Later</button>' : ''}<button class="btn primary" id="upd-install">Update now</button></div>`;
+  if (U.state === 'downloading') return `
+    <progress max="100" ${U.pct != null ? `value="${U.pct}"` : ''} style="width:100%"></progress>
+    <p class="help">Downloading${U.pct != null ? ` ${U.pct}%` : '…'}</p>`;
+  if (U.state === 'allow') return `<div class="alert warn">Turn on <b>Allow from this source</b> for n8n Mobile, then come back here to finish the update.</div>`;
+  return `
+    <button class="btn block" id="upd-check" ${U.state === 'checking' ? 'disabled' : ''}>${U.state === 'checking' ? 'Checking…' : 'Check for updates'}</button>
+    ${U.state === 'latest' ? '<p class="help">You have the latest version.</p>' : ''}
+    ${U.state === 'error' ? `<div class="alert bad" style="margin-top:10px">${esc(U.message)}</div>` : ''}`;
+}
+function bindUpdate(root) {
+  const c = root.querySelector('#upd-check'); if (c) c.onclick = () => runCheck(false);
+  const i = root.querySelector('#upd-install'); if (i) i.onclick = installUpdate;
+}
+function refreshUpdateUi() {
+  const top = sheetStack[sheetStack.length - 1];
+  if (top?.key === 'update') openUpdatePrompt();
+  else if (top?.key === 'settings') { const box = $('#upd-box'); if (box) { box.innerHTML = updateCardHtml(false); bindUpdate(box); } }
+}
+async function runCheck(quiet) {
+  if (U.state === 'downloading' || U.state === 'allow') return;
+  if (!quiet) { U.state = 'checking'; refreshUpdateUi(); }
+  try {
+    const u = await checkForUpdate();
+    if (u) Object.assign(U, { state: 'available', update: u }); else U.state = quiet ? 'idle' : 'latest';
+  } catch (e) { Object.assign(U, quiet ? { state: 'idle' } : { state: 'error', message: `Couldn't check for updates (${e.message}).` }); }
+  if (quiet && U.state === 'available' && !sheetStack.length) openUpdatePrompt(); else refreshUpdateUi();
+}
+async function installUpdate() {
+  Object.assign(U, { state: 'downloading', pct: null }); refreshUpdateUi();
+  const sub = window.Capacitor.addListener('AppUpdater', 'downloadProgress', (p) => {
+    U.pct = p.total > 0 ? Math.round((p.downloaded * 100) / p.total) : null; refreshUpdateUi();
+  });
+  try {
+    const r = await window.Capacitor.nativePromise('AppUpdater', 'downloadAndInstall', { url: U.update.url });
+    U.state = r?.needsPermission ? 'allow' : 'available';
+  } catch (e) { Object.assign(U, { state: 'error', message: `Update failed: ${e.message || e}` }); }
+  sub?.remove?.(); refreshUpdateUi();
+}
+function openUpdatePrompt() {
+  openSheet('update', sheetHead('An update is out') + `<div class="sheet-body" style="padding-top:12px">${updateCardHtml(true)}<div class="spacer"></div></div>`, bindUpdate);
+}
+function startUpdates() {
+  if (!IS_NATIVE || !BUILD) return;
+  runCheck(true);
+  document.addEventListener('visibilitychange', async () => {
+    if (document.hidden) return;
+    if (U.state === 'allow') {
+      // Back from Android's "install unknown apps" screen: try the install again.
+      try { const r = await window.Capacitor.nativePromise('AppUpdater', 'installDownloaded', {}); if (!r?.needsPermission) { U.state = 'available'; refreshUpdateUi(); } } catch {}
+    } else if (U.state === 'idle') runCheck(true);
+  });
+}
+
 // ---------- settings ----------
 function openSettings() {
   openSheet('settings', sheetHead('Settings') + `<div class="sheet-body">
@@ -641,16 +928,22 @@ function openSettings() {
     <div class="card"><dl class="kv">
       <dt>Server</dt><dd>${esc(baseUrl())}</dd>
       <dt>Route</dt><dd>${IS_NATIVE ? 'Direct from the Android app' : S.conn.viaProxy ? 'Through app server (no CORS)' : 'Direct from browser'}</dd>
-      <dt>API key</dt><dd class="mono">••••${esc(S.conn.apiKey.slice(-4))}</dd>
+      <dt>Signed in as</dt><dd>${esc(S.conn.name || S.conn.email || '–')}${S.conn.name && S.conn.email ? `<br><span class="help">${esc(S.conn.email)}</span>` : ''}</dd>
     </dl></div>
     <div class="section-title">Statistics</div>
     <label class="field"><span>How many recent executions to analyse</span>
       <select class="input" id="set-sample">${[100, 250, 500, 1000, 2500].map((n) => `<option ${n === (S.prefs.sample || 500) ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
     <p class="help">Overview numbers are computed from this many of the most recent executions that n8n has kept (n8n prunes old executions on its own schedule).</p>
-    <button class="btn danger block" id="set-logout" style="margin-top:10px">Sign out</button>
+    <div class="section-title">App</div>
+    ${IS_NATIVE ? `<p class="help" style="margin-top:0">n8n Mobile for Android, build ${BUILD || 'dev'}</p><div id="upd-box">${updateCardHtml(false)}</div>`
+      : '<p class="help" style="margin-top:0">Web version: it updates itself whenever you reload the page.</p>'}
+    <button class="btn danger block" id="set-logout" style="margin-top:18px">Sign out</button>
     <div class="spacer"></div></div>`, (sh) => {
+    bindUpdate(sh);
     sh.querySelector('#set-sample').onchange = (e) => { S.prefs.sample = +e.target.value; store.set('n8n.prefs', S.prefs); loadAll(); };
     sh.querySelector('#set-logout').onclick = () => {
+      API.logout().catch(() => {});
+      S.login = { step: 'url', url: S.conn.url, email: S.conn.email || '' };
       store.del('n8n.conn'); S.conn = null; S.workflows = []; S.executions = []; S.loadedAt = null; S.error = null;
       history.back(); render();
     };
@@ -659,14 +952,24 @@ function openSettings() {
 
 // ---------- boot ----------
 async function boot() {
+  await loadBuild();
   try {
     const r = await fetch('app-config.json', { cache: 'no-store' });
     if (!IS_NATIVE && r.ok && (r.headers.get('content-type') || '').includes('json')) S.cfg = { ...S.cfg, ...(await r.json()) };
   } catch {}
   if (S.conn && S.cfg.proxy && S.cfg.n8nUrl) S.conn.url = S.cfg.n8nUrl; // server decides the target
   if (S.conn) S.conn.viaProxy = S.cfg.proxy;
+  if (S.conn?.apiKey) {
+    // Signed in with an API key by version 0.1.0: switch to email + password.
+    S.login = { step: 'url', url: S.conn.url, email: '', error: null };
+    S.conn = null; store.del('n8n.conn');
+  }
   render();
-  if (S.conn) loadAll();
+  if (S.conn) {
+    // Still signed in? (n8n sessions last about a week.)
+    API.me().then((u) => { if (u?.email) { S.conn.email = u.email; S.conn.name = [u.firstName, u.lastName].filter(Boolean).join(' '); store.set('n8n.conn', S.conn); } loadAll(); })
+      .catch((e) => { if (e.status === 401) sessionEnded(); else loadAll(); });
+  }
   setInterval(() => { if (S.conn && !document.hidden && !S.loading && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)) render(); }, 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && S.conn && S.loadedAt && Date.now() - S.loadedAt > 120000) loadAll(); });
   if (IS_NATIVE) {
@@ -676,6 +979,7 @@ async function boot() {
       if (a && a.href) { ev.preventDefault(); window.location.href = a.href; } // Capacitor hands external URLs to the browser
     });
   } else if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  startUpdates();
 }
 boot();
 })();

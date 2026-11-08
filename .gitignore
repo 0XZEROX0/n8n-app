@@ -4,3 +4,4 @@ node_modules/
 .DS_Store
 *.keystore
 *.jks
+!android/app/shared-debug.keystore
