@@ -2,7 +2,7 @@
 
 ## 0.3.0
 
-- The workflow **Flow** tab now draws the workflow like the n8n editor: nodes as blocks with their n8n icons at their saved positions, connected by lines, with If/Loop/error outputs labelled, AI sub-nodes (model, memory, tools) wired in with dashed lines, and sticky notes. Drag to move, pinch or use the buttons to zoom, go full screen, and tap a node to see what it connects to and its settings. Read-only. The old step list is still there under the canvas.
+- The workflow **Flow** tab now draws the workflow like the n8n editor: nodes as blocks with their n8n icons at their saved positions, connected by lines, with If/Loop/error outputs labelled, AI sub-nodes (model, memory, tools) wired in with dashed lines, node groups as titled dashed frames, and sticky notes, in n8n's own canvas colours. Drag to move, pinch or use the buttons to zoom, go full screen, and tap a node to see what it connects to and its settings. Read-only. The old step list is still there under the canvas.
 - Android back (edge swipe or back button) no longer closes the app straight away. It closes the open sheet first, then goes to Overview from another tab, and on Overview a second back within 2 seconds exits ("Swipe back again to exit").
 
 ## 0.2.1

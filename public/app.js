@@ -754,7 +754,7 @@ const GLYPH_FOR = {
 const ICON_COLORS = {
   green: '#35a35a', azure: '#2f7fe0', amber: '#e3a008', blue: '#3a64d8', crimson: '#d0342c', neutral: '#8a879a', 'light-blue': '#3d9ee0',
   teal: '#1a9c92', magenta: '#c43c9a', violet: '#7a4fd8', 'orange-red': '#e2582b', orange: '#ec8a1c', purple: '#8b4fd8', red: '#d6403a',
-  'dark-blue': '#2a4fb0', 'light-green': '#5cb85c', gray: '#8a879a', black: 'var(--text)',
+  'dark-blue': '#2a4fb0', 'light-green': '#5cb85c', gray: '#8a879a', black: 'var(--fc-text)',
 };
 function glyphFor(d) {
   const name = typeof d?.icon === 'string' ? d.icon : d?.icon?.light;
@@ -870,8 +870,18 @@ function flowLayout(wf) {
     const s = { n, x: Number(x) || 0, y: Number(y) || 0, w: Number(p.width) || 240, h: Number(p.height) || 160, color: Number(p.color) || 1, text: String(p.content || '') };
     grow(s.x, s.y, s.x + s.w, s.y + s.h); return s;
   });
+  // Node groups (n8n 2.x): a dashed frame with a title bar around the nodes it holds.
+  const byId = Object.fromEntries(Object.values(byName).filter((L) => L.n.id).map((L) => [L.n.id, L]));
+  const groups = (Array.isArray(wf.nodeGroups) ? wf.nodeGroups : []).map((grp) => {
+    const mem = (grp.nodeIds || []).map((id) => byId[id]).filter(Boolean);
+    if (!mem.length) return null;
+    const x1 = Math.min(...mem.map((L) => L.x)) - 40, x2 = Math.max(...mem.map((L) => L.x + L.w)) + 40;
+    const y1 = Math.min(...mem.map((L) => L.y)) - 90, y2 = Math.max(...mem.map((L) => L.y + L.h)) + 70;
+    grow(x1, y1, x2, y2);
+    return { name: String(grp.name || 'Group'), description: grp.description ? String(grp.description) : '', x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+  }).filter(Boolean);
   if (minX === Infinity) { minX = 0; minY = 0; maxX = 100; maxY = 100; }
-  const out = { nodes: byName, edges, stickies, raw, box: { x: minX, y: minY, w: maxX - minX, h: maxY - minY } };
+  const out = { nodes: byName, edges, stickies, groups, raw, box: { x: minX, y: minY, w: maxX - minX, h: maxY - minY } };
   flowLayouts.set(wf, out);
   return out;
 }
@@ -907,6 +917,15 @@ function flowSvgInner(wf, sel) {
       <rect x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" rx="6"/>
       <foreignObject x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}"><div xmlns="http://www.w3.org/1999/xhtml" class="fs-text">${esc(stickyText(s.text))}</div></foreignObject>
     </g>`).join('');
+  const groups = F.groups.map((gr) => {
+    const per = Math.max(8, Math.floor((gr.w - 32) / 8.5));
+    return `<g class="fg">
+      <rect class="fg-body" x="${gr.x}" y="${gr.y}" width="${gr.w}" height="${gr.h}" rx="10"/>
+      <rect class="fg-head" x="${gr.x}" y="${gr.y}" width="${gr.w}" height="${gr.description ? 56 : 40}" rx="8"/>
+      <text class="fg-name" x="${gr.x + 16}" y="${gr.y + 26}">${esc(wrapLabel(gr.name, per, 1)[0])}</text>
+      ${gr.description ? `<text class="fg-desc" x="${gr.x + 16}" y="${gr.y + 45}">${esc(wrapLabel(gr.description, Math.floor(per * 1.25), 1)[0])}</text>` : ''}
+    </g>`;
+  }).join('');
   const edges = F.edges.map((e) => `<path class="fe${e.ai ? ' ai' : ''}${e.err ? ' err' : ''}${sel && (e.from === sel || e.to === sel) ? ' hl' : ''}" d="${e.d}"${e.ai ? '' : ' marker-end="url(#fa)"'}/>`).join('');
   const nodes = Object.values(F.nodes).map((L) => {
     const { n, x, y, w, h } = L; const cx = x + w / 2, cy = y + h / 2;
@@ -945,7 +964,7 @@ function flowSvgInner(wf, sel) {
   }).join('');
   return `<defs><marker id="fa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="fah"/></marker>
     <pattern id="fdots" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" class="fdot"/></pattern></defs>
-    ${stickies}<g class="fedges">${edges}</g>${nodes}`;
+    ${stickies}${groups}<g class="fedges">${edges}</g>${nodes}`;
 }
 
 function wfFlowTab(wf) {
