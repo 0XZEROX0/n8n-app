@@ -34,6 +34,21 @@ Plain JavaScript, no framework or build step. Everything is in `public/app.js`:
 | Sheets | Workflow detail, run, execution detail and settings open as bottom sheets. A small stack keeps the Android back button working. |
 | `sw.js` | Caches the app shell for fast start. n8n data is never cached. |
 
+## Android home screen widget
+
+Native Java in `android/app/src/main/java/io/github/n8nmobile/app/widget/` (a widget can't be built in the web view):
+
+| File | What it does |
+| --- | --- |
+| `WorkflowWidgetProvider` | The widget. Play button starts a workflow, ↻ refreshes, resizing redraws. |
+| `WidgetRenderer` | Draws one tile per home screen cell (cells ≈ (size in dp + 30) / 70) from the cached status. |
+| `WidgetUpdates` + `WidgetRefreshJob` | Background refresh (JobScheduler): workflow list + newest execution per shown workflow; polls every 10 s while a run is starting or running. |
+| `N8nClient` | n8n `/rest` calls with the app's session cookie and browser id; run = same `/workflows/:id/run` as the app's Run now, or the production webhook. |
+| `WidgetConfigActivity` | Picks and orders the workflows of a widget. |
+| `WidgetStore` | SharedPreferences: session, picks per widget, last status per workflow. |
+
+`MainActivity` copies the sign-in (server URL, basic auth, browser id from the web app's storage) to `WidgetStore` whenever you leave the app, and opens a workflow tapped on the widget through `window.n8nOpenWorkflow`.
+
 ## Data and privacy
 
 - The app never stores your n8n password. The session is n8n's own `n8n-auth` cookie: `server.js` passes only that cookie between the browser and n8n; the Android app keeps it in Android's cookie store. A server (basic auth) password, if you use one, is kept on the device so every request can send it.

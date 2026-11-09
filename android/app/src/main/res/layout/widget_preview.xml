@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the widget looks like in the widget picker (Android 12+). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@drawable/widget_bg" android:orientation="vertical" android:padding="5dp">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal">
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="3dp" android:layout_weight="1"
+            android:background="@drawable/widget_tile_bg" android:orientation="vertical" android:padding="7dp">
+            <TextView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:maxLines="3"
+                android:text="Daily report" android:textColor="@color/widget_text" android:textSize="12sp" android:textStyle="bold" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
+                <ImageView android:layout_width="8dp" android:layout_height="8dp" android:src="@drawable/widget_dot_ok" />
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:paddingStart="4dp"
+                    android:singleLine="true" android:text="OK 09:00" android:textColor="@color/widget_text_dim" android:textSize="10sp" />
+                <ImageView android:layout_width="28dp" android:layout_height="28dp" android:background="@drawable/widget_play_bg"
+                    android:padding="6dp" android:src="@drawable/widget_ic_play" />
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="3dp" android:layout_weight="1"
+            android:background="@drawable/widget_tile_bg" android:orientation="vertical" android:padding="7dp">
+            <TextView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:maxLines="3"
+                android:text="Sync leads" android:textColor="@color/widget_text" android:textSize="12sp" android:textStyle="bold" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
+                <ImageView android:layout_width="8dp" android:layout_height="8dp" android:src="@drawable/widget_dot_ok" />
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:paddingStart="4dp"
+                    android:singleLine="true" android:text="OK 14:02" android:textColor="@color/widget_text_dim" android:textSize="10sp" />
+                <ImageView android:layout_width="28dp" android:layout_height="28dp" android:background="@drawable/widget_play_bg"
+                    android:padding="6dp" android:src="@drawable/widget_ic_play" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal">
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="3dp" android:layout_weight="1"
+            android:background="@drawable/widget_tile_bg" android:orientation="vertical" android:padding="7dp">
+            <TextView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:maxLines="3"
+                android:text="Backup database" android:textColor="@color/widget_text" android:textSize="12sp" android:textStyle="bold" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
+                <ImageView android:layout_width="8dp" android:layout_height="8dp" android:src="@drawable/widget_dot_bad" />
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:paddingStart="4dp"
+                    android:singleLine="true" android:text="Failed 03:00" android:textColor="@color/widget_text_dim" android:textSize="10sp" />
+                <ImageView android:layout_width="28dp" android:layout_height="28dp" android:background="@drawable/widget_play_bg"
+                    android:padding="6dp" android:src="@drawable/widget_ic_play" />
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="3dp" android:layout_weight="1"
+            android:background="@drawable/widget_tile_bg" android:orientation="vertical" android:padding="7dp">
+            <TextView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:maxLines="3"
+                android:text="Send invoices" android:textColor="@color/widget_text" android:textSize="12sp" android:textStyle="bold" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
+                <ImageView android:layout_width="8dp" android:layout_height="8dp" android:src="@drawable/widget_dot_info" />
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:paddingStart="4dp"
+                    android:singleLine="true" android:text="Running" android:textColor="@color/widget_text_dim" android:textSize="10sp" />
+                <ImageView android:layout_width="28dp" android:layout_height="28dp" android:background="@drawable/widget_play_bg"
+                    android:padding="6dp" android:src="@drawable/widget_ic_play" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="widget_bg">#F21C1C26</color>
+    <color name="widget_tile">#FF2A2A36</color>
+    <color name="widget_text">#FFF1F1F5</color>
+    <color name="widget_text_dim">#FFA6A6B6</color>
+    <color name="widget_accent">#FFFF6D8D</color>
+    <color name="widget_ok">#FF4CC47E</color>
+    <color name="widget_bad">#FFFF6363</color>
+    <color name="widget_info">#FF6FA4F0</color>
+    <color name="widget_warn">#FFF2BC55</color>
+    <color name="widget_idle">#FF7A7A8C</color>
+</resources>

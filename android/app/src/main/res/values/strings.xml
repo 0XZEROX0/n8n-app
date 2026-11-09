@@ -4,4 +4,6 @@
     <string name="title_activity_main">n8n Mobile</string>
     <string name="package_name">io.github.n8nmobile.app</string>
     <string name="custom_url_scheme">io.github.n8nmobile.app</string>
+    <string name="widget_label">n8n workflows</string>
+    <string name="widget_description">Run your n8n workflows and see how their last run went. Resize it to show 1, 2, 4 or more.</string>
 </resources>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Home screen widget. Dark versions in values-night. -->
+    <color name="widget_bg">#F7FFFFFF</color>
+    <color name="widget_tile">#FFF2F2F7</color>
+    <color name="widget_text">#FF1F1F2E</color>
+    <color name="widget_text_dim">#FF6E6E80</color>
+    <color name="widget_accent">#FFEA4B71</color>
+    <color name="widget_ok">#FF2E9E5B</color>
+    <color name="widget_bad">#FFD93A3A</color>
+    <color name="widget_info">#FF3D7DD8</color>
+    <color name="widget_warn">#FFE0A030</color>
+    <color name="widget_idle">#FFA0A0B0</color>
+</resources>

@@ -14,6 +14,30 @@ After that you never need to download it again: the app updates itself (see belo
 
 Your n8n must be reachable from the phone over **HTTPS** (Android blocks plain `http://` by default).
 
+## Home screen widget
+
+Long-press your home screen → **Widgets** → **n8n Mobile** → drag **n8n workflows** out. Pick the workflows to show (in the order you tick them) and tap **Add widget**.
+
+Then resize it like any widget. **One cell holds one workflow**:
+
+| Size | Shows |
+|---|---|
+| 1x1 | 1 workflow |
+| 2x1 | 2 workflows side by side |
+| 2x2 | 4 workflows, plus a small header with refresh and ⚙ |
+| 4x2, 3x3, … | 8, 9, … (up to 6x6) |
+
+Each workflow shows its name, how its last run went (green OK, red Failed, blue Running, with the time) and a play button:
+
+- **Play** starts it, the same as **Run now** in the app (Manual / Schedule triggers), or calls its production webhook if it only has a Webhook trigger and is active. The tile shows *Starting…* and then follows the run until it finishes.
+- Workflows that can only start from their own trigger (form, chat, an app event) show an **open** button instead, which opens them in the app.
+- **Tap the workflow** to open it in the app.
+- Free cells show **Add workflow**. **⚙** (or long-press → *Reconfigure* on Android 12+) changes the list.
+
+It refreshes every 30 minutes, every time you leave the app, after you start a run, and when you tap ↻.
+
+The widget uses the app's sign-in: open the app and sign in first. If your n8n session ends, the widget says so; open the app and sign in again. (Code: `android/app/src/main/java/io/github/n8nmobile/app/widget/`. When you leave the app, `MainActivity` hands the widget the server address and n8n's per-device browser id; the n8n session cookie is already in Android's cookie store.)
+
 ## How it is built
 
 The app is wrapped with [Capacitor](https://capacitorjs.com/):
