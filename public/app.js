@@ -22,6 +22,10 @@ const ICONS = {
   fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   expand: '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>',
   shrink: '<path d="M4 14h6v6M20 10h-6V4M10 14l-7 7M14 10l7-7"/>',
+  pen: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/>',
+  link: '<path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
+  save: '<path d="M5 3h11l3 3v15H5zM8 3v5h7V3M8 21v-7h8v7"/>',
 };
 const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[n]}</svg>`;
 
@@ -207,6 +211,14 @@ const API = {
   // Same as pressing "Execute workflow" in the editor, starting from the given trigger.
   run: (wf, triggerName) => api(`/workflows/${encodeURIComponent(wf.id)}/run`, { method: 'POST', body: { workflowData: wf, triggerToStartFrom: { name: triggerName } } }),
   history: (id) => api(`/workflow-history/workflow/${encodeURIComponent(id)}`, { query: { take: 50, skip: 0 } }),
+  // Save an edited workflow, like the editor's Save. versionId lets n8n refuse it if someone else saved in between.
+  saveWorkflow(wf, d) {
+    const body = { name: d.name, nodes: d.nodes, connections: d.connections, settings: d.settings || {}, versionId: wf.versionId };
+    if (wf.checksum) body.expectedChecksum = wf.checksum; // n8n 2.x checks this instead of versionId
+    for (const k of ['description', 'pinData', 'meta']) if (k in d && JSON.stringify(d[k]) !== JSON.stringify(wf[k])) body[k] = d[k];
+    if (Array.isArray(d.nodeGroups)) body.nodeGroups = d.nodeGroups;
+    return api(`/workflows/${encodeURIComponent(wf.id)}`, { method: 'PATCH', body });
+  },
 };
 
 // ---------- domain helpers ----------
@@ -585,19 +597,26 @@ function showSheet(top) {
   bd.onclick = () => history.back();
   top.onBind?.(sh);
 }
-function openSheet(key, html, onBind) {
+// opts.redraw: called instead of re-showing old HTML when the user comes back to this sheet.
+// opts.leave: called when the user leaves this sheet; return false to stay (e.g. to keep unsaved edits).
+function openSheet(key, html, onBind, opts = {}) {
   const top = sheetStack[sheetStack.length - 1];
-  if (top && top.key === key) { Object.assign(top, { html, onBind }); const y = $('#sheet').scrollTop; showSheet(top); $('#sheet').scrollTop = y; return; }
-  sheetStack.push({ key, html, onBind }); history.pushState({ sheet: sheetStack.length }, '');
+  if (top && top.key === key) { Object.assign(top, { html, onBind }, opts); const y = $('#sheet').scrollTop; showSheet(top); $('#sheet').scrollTop = y; return; }
+  sheetStack.push({ key, html, onBind, ...opts }); history.pushState({ sheet: sheetStack.length }, '');
   showSheet(sheetStack[sheetStack.length - 1]); $('#sheet').scrollTop = 0;
 }
 const sheetIsOpen = (key) => sheetStack[sheetStack.length - 1]?.key === key; // only redraw if it's the visible sheet
 function closeSheet() { $('#sheet').hidden = true; $('#sheet-backdrop').hidden = true; document.body.style.overflow = ''; }
 window.addEventListener('popstate', () => {
   if (flowFullExit) { const f = flowFullExit; flowFullExit = null; f(); return; } // Back leaves a full-screen canvas first
+  const leaving = sheetStack[sheetStack.length - 1];
+  if (leaving?.leave && !leaving.leave()) { history.pushState({ sheet: sheetStack.length }, ''); return; } // stay
   sheetStack.pop();
-  if (sheetStack.length) showSheet(sheetStack[sheetStack.length - 1]); else closeSheet();
+  const top = sheetStack[sheetStack.length - 1];
+  if (!top) closeSheet(); else if (top.redraw) top.redraw(); else showSheet(top);
+  if (afterPop) { const f = afterPop; afterPop = null; f(); }
 });
+let afterPop = null; // run once after the next sheet is closed (to open another one in its place)
 
 // ---------- Android back (edge swipe / back button) ----------
 // MainActivity asks this before Android handles back: 'handled' keeps the app open, 'exit' lets it close.
@@ -622,7 +641,39 @@ const sheetHead = (title, extra = '') => `<div class="sheet-head"><h2>${title}</
 async function openWorkflow(id, tab = 'details') {
   const cached = S.workflows.find((w) => String(w.id) === String(id));
   let wf = cached; let runs = null; let runsErr = null; let hist = null; let histErr = null;
-  const draw = () => openSheet('wf:' + id, sheetHead(esc(wf?.name || 'Workflow')) + `<div class="sheet-body">${wf ? wfDetailHtml(wf, tab, runs, runsErr, hist, histErr) : '<div class="skeleton"></div>'}</div>`, (sh) => {
+  // Edits go into a copy (draft) until Save, like the n8n editor. Only possible once the full workflow
+  // (with its connections) has loaded.
+  let draft = null; let saving = false;
+  const ed = {
+    get wf() { return draft || wf; },
+    get dirty() { return !!draft; },
+    get ready() { return !!wf?.connections; },
+    begin() {
+      if (!draft) { draft = JSON.parse(JSON.stringify(wf)); draft.nodes ||= []; draft.connections ||= {}; }
+      return draft;
+    },
+    changed() { if (draft) flowLayouts.delete(draft); if (sheetIsOpen('wf:' + id)) draw(); },
+    discard() { draft = null; draw(); },
+    async save() {
+      if (!draft || saving) return;
+      saving = true; draw();
+      try {
+        const saved = await API.saveWorkflow(wf, draft);
+        wf = { ...wf, ...saved }; draft = null;
+        const i = S.workflows.findIndex((w) => String(w.id) === String(wf.id)); if (i >= 0) S.workflows[i] = { ...S.workflows[i], ...wf };
+        const pub = publishState(wf);
+        toast(pub?.label === 'Unpublished changes' ? 'Saved. Publish it to make the changes live.' : 'Workflow saved');
+        hist = null; API.history(id).then((h) => { hist = Array.isArray(h) ? h : []; if (sheetIsOpen('wf:' + id)) draw(); }, () => {});
+        render();
+      } catch (e) {
+        toast(e.status === 409 || /someone else|changes may be lost/i.test(e.message)
+          ? 'Someone changed this workflow since you opened it. Discard your changes and open it again.' : e.message, true, 6000);
+      }
+      saving = false; draw();
+    },
+  };
+  const draw = () => openSheet('wf:' + id, sheetHead(esc(ed.wf?.name || 'Workflow')) + `<div class="sheet-body">${wf ? wfDetailHtml(ed.wf, tab, runs, runsErr, hist, histErr, ed) : '<div class="skeleton"></div>'}</div>
+    ${draft ? `<div class="savebar"><span>Unsaved changes</span><button class="btn" id="wf-discard" ${saving ? 'disabled' : ''}>Discard</button><button class="btn primary" id="wf-save" ${saving ? 'disabled' : ''}>${saving ? 'Saving…' : 'Save'}</button></div>` : ''}`, (sh) => {
     sh.querySelectorAll('[data-wtab]').forEach((b) => (b.onclick = () => { tab = b.dataset.wtab; draw(); if (tab === 'runs' && !runs) loadRuns(); }));
     sh.querySelectorAll('[data-ex]').forEach((b) => (b.onclick = () => openExecution(b.dataset.ex)));
     const tg = sh.querySelector('#wf-toggle');
@@ -634,8 +685,23 @@ async function openWorkflow(id, tab = 'details') {
         toast(wf.active ? 'Workflow activated' : 'Workflow deactivated'); draw(); render();
       } catch (e) { toast(e.message, true); tg.disabled = false; }
     };
+    const pb = sh.querySelector('#wf-publish');
+    if (pb) pb.onclick = async () => {
+      pb.disabled = true;
+      try {
+        wf = { ...wf, ...(await API.setActive(wf, true)) };
+        const i = S.workflows.findIndex((w) => String(w.id) === String(wf.id)); if (i >= 0) S.workflows[i] = wf;
+        toast('Changes published'); draw(); render();
+      } catch (e) { toast(e.message, true); pb.disabled = false; }
+    };
     const run = sh.querySelector('#wf-run'); if (run) run.onclick = () => openRun(wf);
-    if (tab === 'flow') bindFlow(sh, wf, draw);
+    const ren = sh.querySelector('#wf-edit'); if (ren) ren.onclick = () => openWfEdit(ed);
+    const sv = sh.querySelector('#wf-save'); if (sv) sv.onclick = () => ed.save();
+    const dc = sh.querySelector('#wf-discard'); if (dc) dc.onclick = () => { if (confirm('Discard your unsaved changes?')) ed.discard(); };
+    if (tab === 'flow') bindFlow(sh, ed.wf, draw, ed);
+  }, {
+    redraw: () => draw(),
+    leave: () => !draft || confirm('Close without saving? Your changes to this workflow will be lost.'),
   });
   const loadRuns = async () => {
     try { runs = await API.executions({ workflowId: id }, 100); } catch (e) { runsErr = e.message; }
@@ -649,17 +715,36 @@ async function openWorkflow(id, tab = 'details') {
   if (tab === 'runs') loadRuns();
 }
 
-function wfDetailHtml(wf, tab, runs, runsErr, hist, histErr) {
+// Name and description of the workflow.
+function openWfEdit(ed) {
+  const w = ed.wf;
+  openSheet('wfedit', sheetHead('Edit workflow') + `<div class="sheet-body" style="padding-top:14px">
+    <label class="field"><span>Name</span><input class="input" id="we-name" value="${esc(w.name)}" maxlength="128"></label>
+    <label class="field"><span>Description</span><textarea class="input plain" id="we-desc" placeholder="What this workflow does">${esc(w.description || '')}</textarea></label>
+    <p class="help">Changes are kept until you tap <b>Save</b> on the workflow.</p>
+    <button class="btn primary block" data-close>Done</button><div class="spacer"></div></div>`, null, {
+    leave: () => {
+      const sh = $('#sheet'); const name = sh.querySelector('#we-name').value.trim(); const desc = sh.querySelector('#we-desc').value;
+      if (!name) { toast('The workflow needs a name', true); return false; }
+      if (name !== w.name || desc !== (w.description || '')) {
+        const d = ed.begin(); d.name = name; d.description = desc || null; ed.changed();
+      }
+      return true;
+    },
+  });
+}
+
+function wfDetailHtml(wf, tab, runs, runsErr, hist, histErr, ed) {
   const tabs = [['details', 'Details'], ['flow', 'Flow'], ['runs', 'Runs'], ['history', 'History']];
   let body = '';
-  if (tab === 'details') body = wfDetailsTab(wf, hist);
-  if (tab === 'flow') body = wfFlowTab(wf);
+  if (tab === 'details') body = wfDetailsTab(wf, hist, ed);
+  if (tab === 'flow') body = wfFlowTab(wf, ed);
   if (tab === 'runs') body = runs ? wfRunsTab(runs) : runsErr ? `<div class="alert bad">${esc(runsErr)}</div>` : '<div class="skeleton"></div>';
   if (tab === 'history') body = wfHistoryTab(wf, hist, histErr);
   return `<div class="tabs">${tabs.map(([k, l]) => `<button data-wtab="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>${body}<div class="spacer"></div>`;
 }
 
-function wfDetailsTab(wf, hist) {
+function wfDetailsTab(wf, hist, ed) {
   // Creator = author of the very first saved version, if n8n still keeps it.
   const first = hist && hist.length ? hist[hist.length - 1] : null;
   const creator = first && Math.abs(new Date(first.createdAt) - new Date(wf.createdAt)) < 120000 ? first.authors : null;
@@ -675,6 +760,11 @@ function wfDetailsTab(wf, hist) {
       <button class="btn primary" id="wf-run">${icon('play').replace('<svg', '<svg width="16" height="16"')} Run</button>
       ${wf.isArchived ? '' : `<button class="btn ${wf.active ? 'danger' : ''}" id="wf-toggle">${wf.active ? 'Deactivate' : 'Activate'}</button>`}
     </div>
+    ${pub?.label === 'Unpublished changes' && !ed?.dirty ? `<div class="alert warn" style="margin:12px 0 0">The saved version isn't live yet: n8n still runs the published one.
+      <button class="btn primary block" id="wf-publish" style="margin-top:10px">Publish changes</button></div>` : ''}
+    ${wf.isArchived ? '' : `<div class="btn-row" style="margin-top:8px">
+      <button class="btn" id="wf-edit" ${ed?.ready ? '' : 'disabled'}>${icon('pen').replace('<svg', '<svg width="16" height="16"')} Rename</button>
+      <button class="btn" data-wtab="flow" ${ed?.ready ? '' : 'disabled'}>Edit steps</button></div>`}
     <div class="section-title">Details</div>
     <div class="card"><dl class="kv">
       <dt>ID</dt><dd class="mono">${esc(wf.id)}</dd>
@@ -699,7 +789,7 @@ function wfDetailsTab(wf, hist) {
     <a class="btn block" href="${esc(baseUrl())}/workflow/${encodeURIComponent(wf.id)}" target="_blank" rel="noopener">Open editor</a>`;
 }
 
-// ---------- workflow canvas (read-only, like the n8n editor) ----------
+// ---------- workflow canvas (like the n8n editor; edits go through the draft in openWorkflow) ----------
 // Nodes sit at their saved editor positions (top-left, in canvas pixels) and connections are drawn as
 // curves between their ports. AI sub-nodes (models, memory, tools…) are circles wired into the bottom of
 // the node that uses them, with dashed lines, as in n8n.
@@ -710,6 +800,7 @@ const AI_INPUT_LABELS = {
 };
 const AI_ORDER = Object.keys(AI_INPUT_LABELS);
 const isSticky = (n) => n.type === 'n8n-nodes-base.stickyNote';
+const AI_SUB_TYPES = new Set(); // node types whose only outputs are AI connections (learnt from n8n's node descriptions)
 const flowViews = {}; // per workflow: { k, tx, ty, auto, sel, full }
 const flowLayouts = new WeakMap();
 let flowFullExit = null; // set while a canvas is full screen, so Android's Back button just leaves full screen
@@ -820,12 +911,19 @@ function flowLayout(wf) {
     const aiOut = outs.some((e) => e.type !== 'main');
     L.aiIn = [...new Set(ins.filter((e) => e.type !== 'main').map((e) => e.type))]
       .sort((a, b) => (AI_ORDER.indexOf(a) + 1 || 99) - (AI_ORDER.indexOf(b) + 1 || 99));
-    L.sub = aiOut && !mainOut; // a "sub-node" (model, memory, tool…)
+    L.sub = (aiOut && !mainOut) || (!outs.length && AI_SUB_TYPES.has(n.type)); // a "sub-node" (model, memory, tool…)
     L.trigger = isTrigger(n);
     // outputs
     const t = n.type.split('.').pop();
     let labels = [];
     if (t === 'if') labels = ['true', 'false'];
+    else if (t === 'switch') {
+      // One output per rule (n8n 1.x+ Switch), plus "Fallback" when set to its own output.
+      const rules = p.rules?.values || p.rules?.rules || [];
+      const k = p.mode === 'expression' ? Number(p.numberOutputs) || 4 : (n.typeVersion || 1) < 3 ? 4 : rules.length;
+      labels = Array.from({ length: k }, (_, i) => String((p.mode !== 'expression' && rules[i]?.renameOutput && rules[i]?.outputKey) || i));
+      if (p.options?.fallbackOutput === 'extra') labels.push('Fallback');
+    }
     else if (t === 'filter' && n.parameters?.options?.allowedOutputs) labels = ['kept', 'discarded'];
     else if (t === 'splitInBatches' && (n.typeVersion || 1) >= 3) labels = ['done', 'loop'];
     let nOut = L.sub ? 0 : Math.max(1, mainOut, labels.length);
@@ -969,9 +1067,9 @@ function flowSvgInner(wf, sel) {
     ${stickies}${groups}<g class="fedges">${edges}</g>${nodes}`;
 }
 
-function wfFlowTab(wf) {
+function wfFlowTab(wf, ed) {
   const real = (wf.nodes || []).filter((n) => !isSticky(n));
-  if (!real.length) return '<div class="card empty">This workflow has no nodes.</div>';
+  if (!real.length) return `<div class="card empty">This workflow has no nodes.${ed?.ready ? '<br><br><button class="btn primary" id="fadd-first">Add a first step</button>' : ''}</div>`;
   const v = flowViews[wf.id] || {};
   const steps = orderedNodes(wf).filter((n) => !isSticky(n));
   return `<div class="fcanvas${v.full ? ' full' : ''}" id="fcanvas">
@@ -982,10 +1080,14 @@ function wfFlowTab(wf) {
         <button class="icon-btn" data-fz="out" aria-label="Zoom out">${icon('minus')}</button>
         <button class="icon-btn" data-fz="fit" aria-label="Fit to screen">${icon('fit')}</button>
         <button class="icon-btn" data-fz="full" aria-label="Full screen">${icon(v.full ? 'shrink' : 'expand')}</button>
+        ${ed?.ready ? `<button class="icon-btn fadd" data-fz="add" aria-label="Add a step">${icon('plus')}</button>` : ''}
       </div>
-      <div class="finfo" id="finfo" ${v.sel ? '' : 'hidden'}>${v.sel ? flowInfoHtml(wf, v.sel) : ''}</div>
+      ${v.full && ed?.dirty ? `<button class="btn primary fsave" id="fsave">${icon('save').replace('<svg', '<svg width="16" height="16"')} Save</button>` : ''}
+      <div class="finfo" id="finfo" ${v.sel ? '' : 'hidden'}>${v.sel ? flowInfoHtml(wf, v.sel, ed) : ''}</div>
     </div>
-    <p class="help">Drag to move, pinch to zoom, tap a node for its details. Read-only: edit in n8n.</p>
+    <p class="help">${ed?.ready
+      ? 'Drag to move around, pinch to zoom. Tap a step to edit, connect or delete it; drag a selected step to move it. Pink <b>+</b> adds a step. Nothing changes in n8n until you tap <b>Save</b>.'
+      : 'Drag to move, pinch to zoom, tap a node for its details.'}</p>
     <details class="fsteps"><summary>Steps as a list (${steps.length})</summary>
     <div class="flow">${steps.map((n, i) => `${i ? '<div class="connector"></div>' : ''}
       <div class="node ${n.disabled ? 'disabled' : ''}">
@@ -994,7 +1096,7 @@ function wfFlowTab(wf) {
       </div>`).join('')}</div></details>`;
 }
 
-function flowInfoHtml(wf, name) {
+function flowInfoHtml(wf, name, ed) {
   const F = flowLayout(wf); const L = F.nodes[name]; if (!L) return '';
   const { n } = L;
   const to = [...new Set(F.raw.filter((e) => e.from === name).map((e) => e.to))];
@@ -1008,20 +1110,24 @@ function flowInfoHtml(wf, name) {
       ${to.length ? `<dt>Goes to</dt><dd>${to.map((x) => `<a href="#" data-fgo="${esc(x)}">${esc(x)}</a>`).join(', ')}</dd>` : ''}
       ${n.credentials ? `<dt>Credentials</dt><dd>${Object.values(n.credentials).map((c) => esc(c?.name || '')).join(', ')}</dd>` : ''}
     </dl>
-    ${params ? `<details><summary>Settings</summary><pre class="json">${esc(params)}</pre></details>` : ''}`;
+    ${params ? `<details><summary>Settings</summary><pre class="json">${esc(params)}</pre></details>` : ''}
+    ${ed?.ready ? `<div class="btn-row finfo-acts">
+      <button class="btn primary" data-fedit>${icon('pen').replace('<svg', '<svg width="16" height="16"')} Edit</button>
+      ${L.sub ? '' : `<button class="btn" data-fadd>${icon('plus').replace('<svg', '<svg width="16" height="16"')} Add after</button>`}
+      <button class="btn danger" data-fdel aria-label="Delete">${icon('trash').replace('<svg', '<svg width="16" height="16"')}</button></div>` : ''}`;
 }
 
-function bindFlow(root, wf, redraw) {
+function bindFlow(root, wf, redraw, ed) {
+  const first = root.querySelector('#fadd-first'); if (first) first.onclick = () => openAddNode(ed, null);
   const box = root.querySelector('#fcanvas'); if (!box) return;
   const svg = box.querySelector('svg'); const g = svg.querySelector('.fview');
   const v = (flowViews[wf.id] ||= { k: 1, tx: 0, ty: 0, auto: true, sel: null, full: false });
-  const F = flowLayout(wf);
   const apply = () => g.setAttribute('transform', `translate(${v.tx},${v.ty}) scale(${v.k})`);
   const clampK = (k) => Math.min(3, Math.max(0.12, k));
   // Fit the whole workflow, but never so small that names can't be read on a phone: then start at
   // the left (where the trigger usually is) and let the user drag along.
   const fit = (all) => {
-    const W = svg.clientWidth || 300, H = svg.clientHeight || 300, pad = 24, b = F.box;
+    const W = svg.clientWidth || 300, H = svg.clientHeight || 300, pad = 24, b = flowLayout(wf).box;
     const whole = Math.min((W - pad * 2) / b.w, (H - pad * 2) / b.h, 1.2);
     v.k = clampK(all ? whole : Math.max(whole, Math.min(0.55, (H - pad * 2) / b.h)));
     v.tx = b.w * v.k <= W - pad * 2 ? (W - b.w * v.k) / 2 - b.x * v.k : pad - b.x * v.k;
@@ -1037,25 +1143,33 @@ function bindFlow(root, wf, redraw) {
   const select = (name, center) => {
     v.sel = name;
     g.innerHTML = flowSvgInner(wf, name);
-    info.hidden = !name; info.innerHTML = name ? flowInfoHtml(wf, name) : '';
+    info.hidden = !name; info.innerHTML = name ? flowInfoHtml(wf, name, ed) : '';
     bindInfo();
     if (name && center) {
-      const L = F.nodes[name]; const W = svg.clientWidth, H = svg.clientHeight;
-      v.tx = W / 2 - (L.x + L.w / 2) * v.k; v.ty = H / 3 - (L.y + L.h / 2) * v.k; v.auto = false; apply();
+      const L = flowLayout(wf).nodes[name]; const W = svg.clientWidth, H = svg.clientHeight;
+      if (L) { v.tx = W / 2 - (L.x + L.w / 2) * v.k; v.ty = H / 3 - (L.y + L.h / 2) * v.k; v.auto = false; apply(); }
     }
   };
   const bindInfo = () => {
     info.querySelector('[data-fclose]')?.addEventListener('click', () => select(null));
     info.querySelectorAll('[data-fgo]').forEach((a) => a.addEventListener('click', (ev) => { ev.preventDefault(); select(a.dataset.fgo, true); }));
+    info.querySelector('[data-fedit]')?.addEventListener('click', () => openNodeEditor(ed, v.sel));
+    info.querySelector('[data-fadd]')?.addEventListener('click', () => openAddNode(ed, v.sel));
+    info.querySelector('[data-fdel]')?.addEventListener('click', () => {
+      const name = v.sel; if (!name || !confirm(`Delete the step “${name}”?`)) return;
+      deleteNode(ed.begin(), name); v.sel = null; v.auto = false; ed.changed();
+    });
   };
   bindInfo();
   loadNodeIcons(wf).then((got) => { if (got && box.isConnected) g.innerHTML = flowSvgInner(wf, v.sel); });
+  const fsave = box.querySelector('#fsave'); if (fsave) fsave.onclick = () => ed.save();
 
   box.querySelectorAll('[data-fz]').forEach((b) => (b.onclick = () => {
     const W = svg.clientWidth, H = svg.clientHeight;
     if (b.dataset.fz === 'in') zoomAt(v.k * 1.3, W / 2, H / 2);
     if (b.dataset.fz === 'out') zoomAt(v.k / 1.3, W / 2, H / 2);
     if (b.dataset.fz === 'fit') { v.auto = false; fit(true); }
+    if (b.dataset.fz === 'add') openAddNode(ed, v.sel);
     if (b.dataset.fz === 'full') {
       if (v.full) { history.back(); return; } // popstate runs flowFullExit
       v.full = true; v.auto = true; history.pushState({ flowFull: 1 }, '');
@@ -1064,9 +1178,10 @@ function bindFlow(root, wf, redraw) {
     }
   }));
 
-  // Pan with one finger (or the mouse), pinch with two.
-  const pts = new Map(); let start = null; let moved = false;
+  // Pan with one finger (or the mouse), pinch with two. Dragging the selected step moves it.
+  const pts = new Map(); let start = null; let moved = false; let drag = null; let frame = 0;
   const local = (ev) => { const r = svg.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; };
+  const hitNode = (ev) => document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-node]')?.dataset.node || null;
   const snapshot = () => {
     const p = [...pts.values()];
     if (p.length >= 2) {
@@ -1074,11 +1189,18 @@ function bindFlow(root, wf, redraw) {
     } else if (p.length === 1) start = { k: v.k, tx: v.tx, ty: v.ty, x: p[0][0], y: p[0][1] };
   };
   svg.addEventListener('pointerdown', (ev) => {
-    svg.setPointerCapture?.(ev.pointerId); pts.set(ev.pointerId, local(ev)); if (pts.size === 1) moved = false; snapshot();
+    svg.setPointerCapture?.(ev.pointerId); pts.set(ev.pointerId, local(ev)); if (pts.size === 1) moved = false;
+    drag = null;
+    if (pts.size === 1 && ed?.ready && v.sel && hitNode(ev) === v.sel) {
+      const n = (wf.nodes || []).find((x) => x.name === v.sel);
+      if (n) drag = { name: n.name, pos: Array.isArray(n.position) ? n.position.map(Number) : [0, 0] };
+    }
+    snapshot();
   });
   svg.addEventListener('pointermove', (ev) => {
     if (!pts.has(ev.pointerId)) return; pts.set(ev.pointerId, local(ev)); const p = [...pts.values()];
     if (p.length >= 2 && start?.d) {
+      drag = null;
       const [a, b] = p; const d = Math.hypot(a[0] - b[0], a[1] - b[1]); const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
       const k = clampK(start.k * (d / start.d));
       v.tx = mx - ((start.mx - start.tx) * k) / start.k; v.ty = my - ((start.my - start.ty) * k) / start.k; v.k = k;
@@ -1086,22 +1208,471 @@ function bindFlow(root, wf, redraw) {
     } else if (p.length === 1 && start && start.x != null) {
       const dx = p[0][0] - start.x, dy = p[0][1] - start.y;
       if (!moved && Math.hypot(dx, dy) < 6) return;
-      moved = true; v.auto = false; v.tx = start.tx + dx; v.ty = start.ty + dy; apply();
+      moved = true; v.auto = false;
+      if (drag) {
+        if (wf !== ed.wf || !ed.dirty) wf = ed.begin();
+        const n = wf.nodes.find((x) => x.name === drag.name); if (!n) return;
+        const snap = (x) => Math.round(x / 20) * 20;
+        n.position = [snap(drag.pos[0] + dx / v.k), snap(drag.pos[1] + dy / v.k)];
+        flowLayouts.delete(wf);
+        if (!frame) frame = requestAnimationFrame(() => { frame = 0; g.innerHTML = flowSvgInner(wf, v.sel); });
+        return;
+      }
+      v.tx = start.tx + dx; v.ty = start.ty + dy; apply();
     }
   });
   const end = (ev) => {
     if (!pts.has(ev.pointerId)) return;
     pts.delete(ev.pointerId);
-    if (!pts.size && !moved && ev.type === 'pointerup') {
-      const hit = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-node]');
-      select(hit ? hit.dataset.node : null);
-    }
+    if (!pts.size && drag) { drag = null; if (moved) { ed.changed(); return; } }
+    if (!pts.size && !moved && ev.type === 'pointerup') select(hitNode(ev));
     snapshot();
   };
   svg.addEventListener('pointerup', end); svg.addEventListener('pointercancel', end);
   svg.addEventListener('wheel', (ev) => {
     ev.preventDefault(); const [x, y] = local(ev); zoomAt(v.k * Math.exp(-ev.deltaY * 0.0015), x, y);
   }, { passive: false });
+}
+
+// ---------- editing workflows ----------
+// All edits change the workflow's draft copy (see openWorkflow); nothing reaches n8n until Save.
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
+  : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = (Math.random() * 16) | 0; return (c === 'x' ? r : (r & 3) | 8).toString(16); }));
+const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+const reEsc = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const stripHtml = (t) => String(t || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
+
+function uniqueName(wf, base) {
+  const names = new Set((wf.nodes || []).map((n) => n.name));
+  if (!names.has(base)) return base;
+  const stem = base.replace(/\d+$/, '');
+  for (let i = 1; ; i++) if (!names.has(stem + i)) return stem + i;
+}
+function forEachBranch(wf, fn) { // fn(from, type, outIndex, branchArray)
+  for (const [from, types] of Object.entries(wf.connections || {})) for (const [type, outs] of Object.entries(types || {})) (outs || []).forEach((b, i) => fn(from, type, i, b, outs));
+}
+function connectNodes(wf, from, type, out, to, input = 0) {
+  const outs = ((wf.connections[from] ||= {})[type] ||= []);
+  while (outs.length <= out) outs.push([]);
+  outs[out] ||= [];
+  if (!outs[out].some((c) => c.node === to && (c.index || 0) === input)) outs[out].push({ node: to, type, index: input });
+}
+function disconnectNodes(wf, from, type, out, to, input = 0) {
+  const b = wf.connections[from]?.[type]?.[out];
+  if (b) wf.connections[from][type][out] = b.filter((c) => !(c.node === to && (c.index || 0) === input));
+}
+function deleteNode(wf, name) {
+  const node = wf.nodes.find((n) => n.name === name);
+  // Like n8n: a step with one way in and one way out is cut out of the chain, joining its neighbours.
+  const ins = []; forEachBranch(wf, (from, type, i, b) => (b || []).forEach((c) => { if (type === 'main' && c.node === name) ins.push({ from, out: i }); }));
+  const outs = wf.connections[name]?.main || [];
+  const heal = ins.length === 1 && outs.filter((b) => b?.length).length === 1 && outs[0]?.length ? outs[0].map((c) => ({ ...c })) : [];
+  wf.nodes = wf.nodes.filter((n) => n.name !== name);
+  delete wf.connections[name];
+  forEachBranch(wf, (_f, _t, i, b, outs) => { if (Array.isArray(b)) outs[i] = b.filter((c) => c.node !== name); });
+  if (wf.pinData) delete wf.pinData[name];
+  if (node?.id && Array.isArray(wf.nodeGroups)) wf.nodeGroups.forEach((g) => { if (Array.isArray(g.nodeIds)) g.nodeIds = g.nodeIds.filter((x) => x !== node.id); });
+  heal.forEach((c) => { if (c.node !== ins[0].from) connectNodes(wf, ins[0].from, 'main', ins[0].out, c.node, c.index || 0); });
+}
+// Expressions that point at a step by name ($('Name'), $node["Name"], $items("Name")) follow a rename, like in n8n.
+function renameRefs(v, from, to) {
+  if (typeof v === 'string') {
+    if (!v.includes(from)) return v;
+    const q = reEsc(from);
+    return v.replace(new RegExp(`(\\$\\(\\s*|\\$node\\[\\s*|\\$items\\(\\s*)(['"\`])${q}\\2`, 'g'), (_m, a, c) => `${a}${c}${to}${c}`)
+      .replace(new RegExp(`\\$node\\.${q}(?![\\w$])`, 'g'), /^[A-Za-z_$][\w$]*$/.test(to) ? `$node.${to}` : `$node["${to}"]`);
+  }
+  if (Array.isArray(v)) return v.map((x) => renameRefs(x, from, to));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, renameRefs(x, from, to)]));
+  return v;
+}
+function renameNode(wf, from, to) {
+  for (const n of wf.nodes) { if (n.name === from) n.name = to; n.parameters = renameRefs(n.parameters, from, to); }
+  if (wf.connections[from]) { wf.connections[to] = wf.connections[from]; delete wf.connections[from]; }
+  forEachBranch(wf, (_f, _t, _i, b) => (b || []).forEach((c) => { if (c.node === from) c.node = to; }));
+  if (wf.pinData?.[from]) { wf.pinData[to] = wf.pinData[from]; delete wf.pinData[from]; }
+}
+
+// n8n node descriptions (fields, options, credentials), asked for per type and version.
+const nodeDescs = {};
+async function nodeDesc(type, version) {
+  const k = `${type}@${version}`;
+  if (!(k in nodeDescs)) {
+    nodeDescs[k] = api('/node-types', { method: 'POST', body: { nodeInfos: [{ name: type, version }] } })
+      .then((r) => { const d = Array.isArray(r) ? r[0] || null : null; noteSubType(type, d); return d; }, () => null);
+  }
+  return nodeDescs[k];
+}
+function noteSubType(type, d) {
+  const outs = Array.isArray(d?.outputs) ? d.outputs.map((o) => (typeof o === 'string' ? o : o?.type)) : null;
+  if (outs?.length && outs.every((o) => /^ai_/.test(o || ''))) AI_SUB_TYPES.add(type);
+}
+function aiOutputType(d) {
+  const o = Array.isArray(d?.outputs) ? d.outputs.map((x) => (typeof x === 'string' ? x : x?.type)).find((x) => /^ai_/.test(x || '')) : null;
+  return o || null;
+}
+let credCache = null;
+async function credentialList() {
+  if (!credCache) credCache = api('/credentials').then((r) => (Array.isArray(r) ? r : []), () => { credCache = null; return []; });
+  return credCache;
+}
+
+// All node types this n8n has (the same list its editor loads), newest version of each.
+let catalog = null;
+async function nodeCatalog() {
+  if (catalog) return catalog;
+  const res = await rawFetch('/types/nodes.json');
+  if (!res.ok) throw new ApiError(`Couldn't load the list of steps (HTTP ${res.status}).`, res.status);
+  const all = await res.json();
+  const best = new Map();
+  for (const t of Array.isArray(all) ? all : []) {
+    if (!t?.name || t.hidden || isSticky({ type: t.name })) continue;
+    const ver = Array.isArray(t.version) ? Math.max(...t.version) : Number(t.version) || 1;
+    const cur = best.get(t.name);
+    if (!cur || ver > cur.ver) best.set(t.name, { ver, t });
+  }
+  catalog = [...best.values()].map(({ ver, t }) => {
+    noteSubType(t.name, t);
+    return {
+      type: t.name, version: t.defaultVersion ?? ver, displayName: t.displayName || shortType(t.name), description: stripHtml(t.description),
+      trigger: (t.group || []).includes('trigger') || /trigger$/i.test(t.name), defaultsName: t.defaults?.name,
+      webhook: Array.isArray(t.webhooks) && t.webhooks.length > 0, sub: AI_SUB_TYPES.has(t.name), aiType: aiOutputType(t),
+      search: `${t.displayName} ${t.name.split('.').pop()} ${(t.codex?.alias || []).join(' ')}`.toLowerCase(),
+    };
+  }).sort((a, b) => a.displayName.localeCompare(b.displayName));
+  return catalog;
+}
+
+function placeNewNode(wf, after, sub) {
+  const F = flowLayout(wf); const boxes = Object.values(F.nodes);
+  const taken = (x, y) => boxes.some((L) => x < L.x + L.w + 40 && x + 100 > L.x - 40 && y < L.y + L.h + 40 && y + 100 > L.y - 40);
+  let x = 0, y = 0;
+  const A = after && F.nodes[after];
+  if (A && sub) { x = A.x + 20; y = A.y + A.h + 120; }
+  else if (A) { x = A.x + A.w + 120; y = A.y; }
+  else if (boxes.length) {
+    const roots = boxes.filter((L) => !L.sub);
+    const R = (sub && roots.filter((L) => L.aiIn.length).pop()) || roots.reduce((m, L) => (!m || L.x + L.w > m.x + m.w ? L : m), null);
+    if (R && sub) { x = R.x + 20; y = R.y + R.h + 120; } // AI parts go under the step that uses them
+    else if (R) { x = R.x + R.w + 120; y = R.y; }
+  }
+  while (taken(x, y)) { if (sub) x += 120; else y += 140; }
+  return [Math.round(x / 20) * 20, Math.round(y / 20) * 20];
+}
+function addNodeTo(ed, item, after) {
+  const d = ed.begin();
+  const name = uniqueName(d, item.defaultsName || item.displayName);
+  const node = { parameters: {}, id: uuid(), name, type: item.type, typeVersion: item.version, position: placeNewNode(d, after, item.sub) };
+  if (item.webhook) node.webhookId = uuid();
+  d.nodes.push(node);
+  const fromL = after && flowLayout(d).nodes[after];
+  if (fromL && !fromL.sub && item.sub && item.aiType && /langchain/i.test(fromL.n.type) && !fromL.trigger) connectNodes(d, name, item.aiType, 0, after, 0); // a model/tool/memory for that step
+  else if (fromL && !fromL.sub && !item.trigger && !item.sub) connectNodes(d, after, 'main', 0, name, 0);
+  (flowViews[d.id] ||= { k: 1, tx: 0, ty: 0, auto: false, sel: null, full: false }).sel = name;
+  flowViews[d.id].auto = false;
+  ed.changed();
+  return name;
+}
+
+function openAddNode(ed, after) {
+  if (!ed?.ready) return;
+  let q = ''; let list = null; let err = null;
+  const draw = () => {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const hits = list ? list.filter((t) => words.every((w) => t.search.includes(w)))
+      .sort((a, b) => (words[0] ? (b.displayName.toLowerCase().startsWith(words[0]) - a.displayName.toLowerCase().startsWith(words[0])) : 0)) : [];
+    const html = sheetHead('Add a step') + `<div class="sheet-body">
+      ${after ? `<p class="help">It will run after <b>${esc(after)}</b> (AI models, memory and tools get attached to it instead).</p>` : '<p class="help">It won\'t be connected yet; connect it from its settings.</p>'}
+      <div class="search"><input class="input" id="an-q" type="search" placeholder="Search steps, e.g. HTTP, Slack, Code" value="${esc(q)}" autocomplete="off"></div>
+      ${err ? `<div class="alert bad">${esc(err)}</div>` : !list ? '<div class="skeleton"></div>'
+        : `<div class="list">${hits.slice(0, 80).map((t) => `<button class="row" data-add="${esc(t.type)}">
+            ${typeof nodeIcons[t.type] === 'string' ? `<img class="an-ico" src="${esc(nodeIcons[t.type])}" alt="">` : `<span class="an-ico ph" style="background:hsl(${hue(t.type)} 60% 46%)">${esc(initials(t.displayName))}</span>`}
+            <div class="main"><div class="title">${esc(t.displayName)}</div><div class="meta">${esc(t.description || shortType(t.type))}</div></div>
+            ${t.trigger ? '<span class="badge">Trigger</span>' : t.sub ? '<span class="badge">AI</span>' : ''}</button>`).join('') || '<div class="empty">No steps match</div>'}</div>
+          ${hits.length > 80 ? `<p class="help">${hits.length - 80} more: type more to narrow it down.</p>` : ''}`}
+      <div class="spacer"></div></div>`;
+    openSheet('addnode', html, (sh) => {
+      const inp = sh.querySelector('#an-q');
+      inp.oninput = () => { q = inp.value; const pos = inp.selectionStart; draw(); const n = $('#an-q'); n.focus(); n.setSelectionRange(pos, pos); };
+      sh.querySelectorAll('[data-add]').forEach((b) => (b.onclick = () => {
+        const item = list.find((t) => t.type === b.dataset.add); if (!item) return;
+        const name = addNodeTo(ed, item, after);
+        afterPop = () => openNodeEditor(ed, name);
+        history.back();
+      }));
+    });
+  };
+  draw();
+  nodeCatalog().then((c) => { list = c; }, (e) => { err = e.message; }).then(() => { if (sheetIsOpen('addnode')) draw(); });
+}
+
+// ----- the step editor -----
+// Shows the step's fields the way n8n describes them (only those that apply to the current choices),
+// with a JSON view for anything else.
+function condOk(cond, val) {
+  if (cond && typeof cond === 'object' && cond._cnd) {
+    const [op, arg] = Object.entries(cond._cnd)[0] || [];
+    switch (op) {
+      case 'eq': return val === arg; case 'not': return val !== arg;
+      case 'gte': return val >= arg; case 'lte': return val <= arg; case 'gt': return val > arg; case 'lt': return val < arg;
+      case 'between': return val >= arg?.from && val <= arg?.to;
+      case 'startsWith': return String(val).startsWith(arg); case 'endsWith': return String(val).endsWith(arg);
+      case 'includes': return String(val).includes(arg);
+      case 'regex': try { return new RegExp(arg).test(String(val)); } catch { return true; }
+      case 'exists': return val !== undefined && val !== null && val !== '';
+      default: return true;
+    }
+  }
+  return cond === val;
+}
+function propShown(p, node, params, vals, known) {
+  const d = p.displayOptions; if (!d) return true;
+  const get = (k) => {
+    if (k === '@version') return Number(node.typeVersion) || 1;
+    if (k === '@tool') return /Tool$/.test(node.type);
+    const key = k.replace(/^\//, '');
+    return key in params ? params[key] : vals[key];
+  };
+  const matches = (k, list) => {
+    const v = get(k);
+    if (v === undefined) return known?.has(k.replace(/^\//, '')) ? false : null; // a field that isn't shown: no match; unknown: don't decide on it
+    const vs = Array.isArray(v) ? v : [v];
+    return (Array.isArray(list) ? list : [list]).some((c) => vs.some((x) => condOk(c, x)));
+  };
+  for (const [k, list] of Object.entries(d.show || {})) if (matches(k, list) === false) return false;
+  for (const [k, list] of Object.entries(d.hide || {})) if (matches(k, list) === true) return false;
+  return true;
+}
+function visibleProps(desc, node, params) {
+  const known = new Set((desc?.properties || []).map((p) => p?.name));
+  let vals = {}; let out = [];
+  // Twice, so a field can depend on one listed after it.
+  for (let pass = 0, prev = {}; pass < 2; pass++, prev = vals) {
+    vals = {}; out = []; const seen = new Set();
+    for (const p of desc?.properties || []) {
+      if (!p?.name || seen.has(p.name) || !propShown(p, node, params, { ...prev, ...vals }, known)) continue;
+      seen.add(p.name); vals[p.name] = p.name in params ? params[p.name] : p.default; out.push(p);
+    }
+  }
+  return { props: out, vals, known };
+}
+const NODE_SETTING_DEFAULTS = { notes: '', alwaysOutputData: false, executeOnce: false, retryOnFail: false, maxTries: 3, waitBetweenTries: 1000, onError: 'stopWorkflow' };
+
+async function openNodeEditor(ed, name) {
+  if (!ed?.ready) return;
+  const orig = ed.wf.nodes.find((n) => n.name === name); if (!orig) return;
+  const key = 'node:' + name;
+  const st = { desc: undefined, creds: [], json: false, params: clone(orig.parameters || {}), cred: clone(orig.credentials || {}), fields: [] };
+  const sheet = () => $('#sheet');
+
+  // Fields → st.params. Returns an error message, or null.
+  const sync = () => {
+    const sh = sheet();
+    if (st.json) {
+      const ta = sh.querySelector('#ne-pjson'); if (!ta) return null;
+      try { const v = JSON.parse(ta.value || '{}'); if (!v || typeof v !== 'object' || Array.isArray(v)) throw 0; st.params = v; } catch { return 'The parameters are not valid JSON.'; }
+      return null;
+    }
+    for (const f of st.fields) {
+      const els = [...sh.querySelectorAll(`[data-f="${f.i}"]`)]; if (!els.length) continue;
+      const sig = els.map((e) => (e.type === 'checkbox' ? String(e.checked) : e.value)).join('\u0001');
+      if (sig === f.sig) continue;
+      const el = els[0]; let v;
+      if (f.kind === 'bool') v = el.checked;
+      else if (f.kind === 'num') { const t = el.value.trim(); v = t.startsWith('=') ? t : t === '' ? f.p.default : Number(t); if (typeof v === 'number' && isNaN(v)) return `“${f.p.displayName}” must be a number.`; }
+      else if (f.kind === 'opt') { const ix = Number(el.value); v = ix < 0 ? f.cur : f.p.options[ix]?.value; }
+      else if (f.kind === 'rl') {
+        const mode = sh.querySelector(`[data-f="${f.i}"][data-part="mode"]`)?.value; const val = sh.querySelector(`[data-f="${f.i}"][data-part="value"]`)?.value ?? '';
+        v = { __rl: true, value: val, mode: mode || f.cur?.mode || 'id' };
+      } else if (f.kind === 'jv') { try { v = el.value.trim() ? JSON.parse(el.value) : undefined; } catch { return `“${f.p.displayName}” is not valid JSON.`; } }
+      else v = el.value;
+      if (v === undefined) delete st.params[f.p.name]; else st.params[f.p.name] = v;
+      f.sig = sig; f.cur = v;
+    }
+    sh.querySelectorAll('[data-cred]').forEach((s) => {
+      const t = s.dataset.cred; const c = st.creds.find((x) => String(x.id) === s.value);
+      if (c) st.cred[t] = { id: String(c.id), name: c.name }; else if (s.value === '') delete st.cred[t];
+    });
+    return null;
+  };
+
+  const fieldHtml = (p, i) => {
+    const cur = p.name in st.params ? st.params[p.name] : p.default;
+    const isExpr = typeof cur === 'string' && cur.startsWith('=');
+    const label = `<span>${esc(p.displayName || p.name)}${p.required ? ' *' : ''}</span>`;
+    const hint = p.hint || p.description ? `<p class="help fhelp">${esc(stripHtml(p.hint || p.description)).slice(0, 300)}</p>` : '';
+    const f = { i, p, cur, kind: 'str' };
+    let ctl;
+    const str = (v) => (v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+    if (p.type === 'notice' || p.type === 'callout') return `<div class="alert info fnotice">${esc(stripHtml(p.displayName))}</div>`;
+    if (p.type === 'hidden' || p.type === 'button' || p.type === 'curlImport') return '';
+    if (p.type === 'boolean' && !isExpr) { f.kind = 'bool'; st.fields.push(f); return `<label class="check"><input type="checkbox" data-f="${i}" ${cur ? 'checked' : ''}> ${esc(p.displayName)}</label>${hint}`; }
+    if (p.type === 'options' && !isExpr && Array.isArray(p.options) && p.options.length) {
+      f.kind = 'opt'; const ix = p.options.findIndex((o) => o.value === cur);
+      ctl = `<select class="input" data-f="${i}" data-live>${ix < 0 ? `<option value="-1" selected>${esc(str(cur) || '(not set)')}</option>` : ''}${p.options.map((o, k) => `<option value="${k}" ${k === ix ? 'selected' : ''}>${esc(o.name ?? o.value)}</option>`).join('')}</select>`;
+    } else if (p.type === 'resourceLocator') {
+      f.kind = 'rl'; const rl = cur && typeof cur === 'object' ? cur : { mode: 'id', value: cur ?? '' };
+      const modes = (p.modes || []).map((m) => m.name);
+      if (rl.mode && !modes.includes(rl.mode)) modes.unshift(rl.mode);
+      ctl = `<div class="rl">${modes.length > 1 ? `<select class="input" data-f="${i}" data-part="mode">${modes.map((m) => `<option ${m === rl.mode ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>` : `<input type="hidden" data-f="${i}" data-part="mode" value="${esc(rl.mode || modes[0] || 'id')}">`}
+        <input class="input" data-f="${i}" data-part="value" value="${esc(str(rl.value))}" placeholder="${esc(rl.cachedResultName || (rl.mode === 'url' ? 'https://…' : 'ID'))}" autocapitalize="off"></div>`;
+    } else if (p.type === 'number' || (p.type === 'boolean' && isExpr)) {
+      f.kind = p.type === 'number' ? 'num' : 'str';
+      ctl = `<input class="input" data-f="${i}" ${isExpr ? '' : 'inputmode="decimal"'} value="${esc(str(cur))}">`;
+    } else if (['string', 'json', 'dateTime', 'color', 'options'].includes(p.type) || isExpr) {
+      const long = p.type === 'json' || (p.typeOptions?.rows || 0) > 1 || p.typeOptions?.editor || str(cur).length > 60 || str(cur).includes('\n');
+      ctl = long ? `<textarea class="input" data-f="${i}" rows="${Math.min(12, Math.max(3, p.typeOptions?.rows || 4))}" autocapitalize="off" spellcheck="false">${esc(str(cur))}</textarea>`
+        : `<input class="input" data-f="${i}" ${p.typeOptions?.password ? 'type="password"' : ''} value="${esc(str(cur))}" autocapitalize="off" placeholder="${esc(p.placeholder || '')}">`;
+    } else {
+      f.kind = 'jv';
+      return (st.fields.push(f), `<label class="field">${label.replace('</span>', ' <em>(JSON)</em></span>')}
+        <textarea class="input" data-f="${i}" rows="4" autocapitalize="off" spellcheck="false">${esc(cur === undefined ? '' : JSON.stringify(cur, null, 2))}</textarea>${hint}</label>`);
+    }
+    st.fields.push(f);
+    return `<label class="field">${label}${ctl}${hint}</label>`;
+  };
+
+  const paramsHtml = () => {
+    st.fields = [];
+    if (st.json || !st.desc) {
+      return `${st.desc === null ? '<div class="alert warn">n8n didn\'t describe this step\'s fields, so they are shown as JSON.</div>' : ''}
+        <textarea class="input ne-pjson" id="ne-pjson" rows="14" autocapitalize="off" spellcheck="false">${esc(JSON.stringify(st.params, null, 2))}</textarea>
+        <p class="help">Values starting with <code>=</code> are n8n expressions, e.g. <code>={{ $json.email }}</code>.</p>`;
+    }
+    const node = { ...orig, parameters: st.params };
+    const { props, vals, known } = visibleProps(st.desc, node, st.params);
+    const creds = (st.desc.credentials || []).filter((c) => propShown(c, node, st.params, vals, known));
+    const fields = props.map(fieldHtml).join('');
+    const credHtml = creds.map((c) => {
+      const mine = st.creds.filter((x) => x.type === c.name); const curId = st.cred[c.name]?.id;
+      return `<label class="field"><span>Credential: ${esc(c.displayName || shortType(c.name))}${c.required ? ' *' : ''}</span>
+        <select class="input" data-cred="${esc(c.name)}"><option value="">None</option>${curId && !mine.some((x) => String(x.id) === String(curId)) ? `<option value="${esc(curId)}" selected>${esc(st.cred[c.name]?.name || curId)}</option>` : ''}
+        ${mine.map((x) => `<option value="${esc(x.id)}" ${String(x.id) === String(curId) ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+        ${!mine.length ? '<p class="help fhelp">You have no credential of this kind yet. Create it in n8n, then pick it here.</p>' : ''}</label>`;
+    }).join('');
+    return (credHtml + fields) || '<div class="card empty">This step has no settings.</div>';
+  };
+  const bindParams = () => {
+    const sh = sheet(); const box = sh.querySelector('#ne-params'); if (!box) return;
+    st.fields.forEach((f) => { const els = [...box.querySelectorAll(`[data-f="${f.i}"]`)]; f.sig = els.map((e) => (e.type === 'checkbox' ? String(e.checked) : e.value)).join('\u0001'); });
+    // A choice can show or hide other fields (Resource → Operation → …): redraw them when it changes.
+    box.querySelectorAll('[data-live], input[type=checkbox][data-f]').forEach((el) => (el.onchange = () => {
+      const err = sync(); if (err) { toast(err, true); return; } box.innerHTML = paramsHtml(); bindParams();
+    }));
+  };
+
+  const connsHtml = () => {
+    const wf = ed.wf; const F = flowLayout(wf); const L = F.nodes[name]; if (!L) return '';
+    const others = Object.values(F.nodes).filter((x) => x.n.name !== name && !x.sub && x.nIn > 0);
+    const targetOpts = others.flatMap((x) => (x.nIn > 1 ? Array.from({ length: x.nIn }, (_, k) => [`${x.n.name}\u0001${k}`, `${x.n.name} (input ${k + 1})`]) : [[`${x.n.name}\u0001${0}`, x.n.name]]));
+    const outLabel = (i) => L.outLabels[i] || (L.nOut > 1 ? `Output ${i + 1}` : 'Output');
+    let h = '';
+    if (L.sub) {
+      const mine = F.raw.filter((e) => e.from === name && e.type !== 'main');
+      const t = mine[0]?.type || aiOutputType(st.desc);
+      h += `<div class="conn-group"><div class="conn-head">Used by</div>
+        ${mine.map((e) => `<div class="conn">${esc(e.to)} <span class="help">${esc(AI_INPUT_LABELS[e.type] || e.type)}</span><button class="icon-btn" data-cdel="${esc([e.type, e.out, e.to, e.in].join('\u0001'))}" aria-label="Disconnect">${icon('close')}</button></div>`).join('')}
+        ${t ? `<select class="input" data-cadd="${esc(t)}\u00010"><option value="">+ Connect to…</option>${Object.values(F.nodes).filter((x) => x.n.name !== name && !x.sub && !x.trigger).map((x) => `<option value="${esc(x.n.name)}\u00010">${esc(x.n.name)}</option>`).join('')}</select>` : ''}</div>`;
+    } else {
+      for (let i = 0; i < Math.max(L.nOut, 0); i++) {
+        const targets = (wf.connections[name]?.main?.[i] || []).filter((c) => F.nodes[c.node]);
+        h += `<div class="conn-group"><div class="conn-head">${esc(outLabel(i))} goes to</div>
+          ${targets.map((c) => `<div class="conn">${esc(c.node)}${c.index ? ` <span class="help">input ${c.index + 1}</span>` : ''}<button class="icon-btn" data-cdel="${esc(['main', i, c.node, c.index || 0].join('\u0001'))}" aria-label="Disconnect">${icon('close')}</button></div>`).join('')}
+          <select class="input" data-cadd="main\u0001${i}"><option value="">+ Connect to…</option>${targetOpts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></div>`;
+      }
+    }
+    const ins = F.raw.filter((e) => e.to === name);
+    if (ins.length) h += `<div class="conn-group"><div class="conn-head">Comes from</div>${ins.map((e) => `<div class="conn">${esc(e.from)}${F.nodes[e.from]?.outLabels[e.out] ? ` <span class="help">${esc(F.nodes[e.from].outLabels[e.out])}</span>` : ''}${e.type !== 'main' ? ` <span class="help">${esc(AI_INPUT_LABELS[e.type] || e.type)}</span>` : ''}
+      <button class="icon-btn" data-cin="${esc([e.from, e.type, e.out, e.in].join('\u0001'))}" aria-label="Disconnect">${icon('close')}</button></div>`).join('')}</div>`;
+    return h || '<p class="help">Triggers start the workflow, so nothing connects into them.</p>';
+  };
+  const bindConns = () => {
+    const box = sheet().querySelector('#ne-conns'); if (!box) return;
+    const redo = () => { ed.changed(); box.innerHTML = connsHtml(); bindConns(); };
+    box.querySelectorAll('[data-cdel]').forEach((b) => (b.onclick = () => { const [t, o, to, inp] = b.dataset.cdel.split('\u0001'); disconnectNodes(ed.begin(), name, t, +o, to, +inp); redo(); }));
+    box.querySelectorAll('[data-cin]').forEach((b) => (b.onclick = () => { const [from, t, o, inp] = b.dataset.cin.split('\u0001'); disconnectNodes(ed.begin(), from, t, +o, name, +inp); redo(); }));
+    box.querySelectorAll('[data-cadd]').forEach((s) => (s.onchange = () => {
+      if (!s.value) return; const [t, o] = s.dataset.cadd.split('\u0001'); const [to, inp] = s.value.split('\u0001');
+      connectNodes(ed.begin(), name, t, +o, to, +inp); redo();
+    }));
+  };
+
+  const html = () => {
+    const n = ed.wf.nodes.find((x) => x.name === name) || orig;
+    const desc = st.desc;
+    return sheetHead(esc(name), `<button class="icon-btn" id="ne-del" aria-label="Delete step">${icon('trash')}</button>`) + `<div class="sheet-body">
+    ${desc === undefined ? '<div class="skeleton" style="margin-top:12px"></div>' : `
+    <p class="help" style="margin-top:10px">${esc(desc?.displayName || shortType(n.type))} · v${esc(n.typeVersion)}${desc?.description ? ' · ' + esc(stripHtml(desc.description)) : ''}</p>
+    <label class="field"><span>Name</span><input class="input" id="ne-name" value="${esc(n.name)}"></label>
+    <label class="check"><input type="checkbox" id="ne-on" ${n.disabled ? '' : 'checked'}> Enabled (a disabled step passes its input straight through)</label>
+    <div class="section-title row-title">Parameters<button class="linkbtn" id="ne-mode">${st.json ? 'Show as fields' : 'Edit as JSON'}</button></div>
+    <div id="ne-params">${paramsHtml()}</div>
+    <div class="section-title">Connections</div><div id="ne-conns">${connsHtml()}</div>
+    <details class="ne-more"><summary>Step settings</summary>
+      <label class="field"><span>Notes</span><textarea class="input plain" id="ne-notes" rows="3">${esc(n.notes || '')}</textarea></label>
+      <label class="check"><input type="checkbox" id="ne-always" ${n.alwaysOutputData ? 'checked' : ''}> Always output data</label>
+      <label class="check"><input type="checkbox" id="ne-once" ${n.executeOnce ? 'checked' : ''}> Execute once (first item only)</label>
+      <label class="check"><input type="checkbox" id="ne-retry" ${n.retryOnFail ? 'checked' : ''}> Retry on fail</label>
+      <div class="grid2"><label class="field"><span>Max tries</span><input class="input" id="ne-tries" inputmode="numeric" value="${esc(n.maxTries ?? 3)}"></label>
+      <label class="field"><span>Wait between (ms)</span><input class="input" id="ne-wait" inputmode="numeric" value="${esc(n.waitBetweenTries ?? 1000)}"></label></div>
+      <label class="field"><span>On error</span><select class="input" id="ne-onerr">${[['stopWorkflow', 'Stop workflow'], ['continueRegularOutput', 'Continue'], ['continueErrorOutput', 'Continue (using error output)']]
+        .map(([v, l]) => `<option value="${v}" ${(n.onError || 'stopWorkflow') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    </details>
+    <button class="btn primary block" data-close style="margin-top:14px">Done</button>
+    <p class="help">Changes are kept until you tap <b>Save</b> on the workflow.</p>`}
+    <div class="spacer"></div></div>`;
+  };
+  const bind = (sh) => {
+    sh.querySelector('#ne-del').onclick = () => {
+      if (!confirm(`Delete the step “${name}”?`)) return;
+      deleteNode(ed.begin(), name); const v = flowViews[ed.wf.id]; if (v) v.sel = null;
+      st.deleted = true; ed.changed(); history.back();
+    };
+    const mode = sh.querySelector('#ne-mode');
+    if (mode) mode.onclick = () => {
+      const err = sync(); if (err) { toast(err, true); return; }
+      st.json = !st.json; mode.textContent = st.json ? 'Show as fields' : 'Edit as JSON';
+      sh.querySelector('#ne-params').innerHTML = paramsHtml(); bindParams();
+    };
+    bindParams(); bindConns();
+  };
+  // Leaving the editor (Done, Back or swipe) keeps what was changed.
+  const leave = () => {
+    if (st.deleted || st.desc === undefined) return true;
+    const sh = sheet(); const err = sync(); if (err) { toast(err, true); return false; }
+    const newName = sh.querySelector('#ne-name').value.trim();
+    if (!newName) { toast('The step needs a name', true); return false; }
+    if (newName !== name && ed.wf.nodes.some((x) => x.name === newName)) { toast(`There is already a step called “${newName}”.`, true); return false; }
+    const n0 = ed.wf.nodes.find((x) => x.name === name) || orig;
+    const want = {
+      disabled: !sh.querySelector('#ne-on').checked, notes: sh.querySelector('#ne-notes').value,
+      alwaysOutputData: sh.querySelector('#ne-always').checked, executeOnce: sh.querySelector('#ne-once').checked,
+      retryOnFail: sh.querySelector('#ne-retry').checked, maxTries: Number(sh.querySelector('#ne-tries').value) || 3,
+      waitBetweenTries: Number(sh.querySelector('#ne-wait').value) || 0, onError: sh.querySelector('#ne-onerr').value,
+    };
+    const changes = [];
+    if (JSON.stringify(st.params) !== JSON.stringify(n0.parameters || {})) changes.push((n) => { n.parameters = st.params; });
+    if (JSON.stringify(st.cred) !== JSON.stringify(n0.credentials || {})) changes.push((n) => { if (Object.keys(st.cred).length) n.credentials = st.cred; else delete n.credentials; });
+    if (want.disabled !== !!n0.disabled) changes.push((n) => { if (want.disabled) n.disabled = true; else delete n.disabled; });
+    for (const [k, def] of Object.entries(NODE_SETTING_DEFAULTS)) {
+      if (k === 'maxTries' || k === 'waitBetweenTries') { if (!want.retryOnFail && n0[k] === undefined) continue; }
+      const have = n0[k] ?? def;
+      if (want[k] !== have) changes.push((n) => { if (want[k] === def) delete n[k]; else n[k] = want[k]; });
+    }
+    if (!changes.length && newName === name) return true;
+    const d = ed.begin(); const n = d.nodes.find((x) => x.name === name); if (!n) return true;
+    changes.forEach((fn) => fn(n));
+    if (newName !== name) {
+      renameNode(d, name, newName);
+      const v = flowViews[d.id]; if (v?.sel === name) v.sel = newName;
+    }
+    ed.changed();
+    return true;
+  };
+  openSheet(key, html(), bind, { leave });
+  const [desc, creds] = await Promise.all([nodeDesc(orig.type, orig.typeVersion || 1), credentialList()]);
+  st.desc = desc || null; st.creds = creds; if (!desc) st.json = true;
+  if (sheetIsOpen(key)) openSheet(key, html(), bind, { leave });
 }
 
 function wfRunsTab(runs) {

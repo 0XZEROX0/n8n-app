@@ -3,6 +3,11 @@
 ## Unreleased
 
 - **Home screen widget** (Android app): one resizable widget. Each home screen cell holds one workflow, so 1x1 shows one, 2x1 two, 2x2 four, and bigger sizes more. Each shows the last run (OK / Failed / Running, with the time) and a play button that starts it. Tap a workflow to open it in the app; pick and order the workflows when you add it, or later with the ⚙ button (or "Reconfigure" on Android 12+). Refreshes every 30 minutes, when you leave the app, after a run, and with the ↻ button.
+## 0.4.0
+
+- **Edit workflows from the phone.** Rename a workflow and change its description. In the **Flow** tab, tap a step and then **Edit** to change its fields (the same fields the n8n editor shows, following your choices such as Resource and Operation; anything complex, or the whole step, can be edited as JSON), its credential, its name (expressions like `$('Old name')` are updated), whether it is enabled, and its settings (retry on fail, on error, always output data, execute once, notes). Connect and disconnect steps, including If/Switch outputs, Merge inputs and AI models/memory/tools.
+- Drag a selected step to move it. **Add after** or the pink **+** adds any step your n8n has, searchable; **Delete** removes a step and joins its neighbours like n8n does.
+- Edits are kept as a draft with an **Unsaved changes** bar (Save / Discard) and a Save button in full screen; closing the workflow asks before throwing changes away. On n8n 2.x, a saved change to a published workflow shows **Publish changes**.
 
 ## 0.3.0
 
