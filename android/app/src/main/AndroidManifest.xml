@@ -58,6 +58,9 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 14+ refuses (and crashes) a background job that waits for network without this.
+         The home screen widget refreshes with such a job. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- In-app updates hand the downloaded APK to Android's installer. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 </manifest>
