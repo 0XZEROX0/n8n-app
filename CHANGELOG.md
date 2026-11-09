@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Android back (edge swipe or back button) no longer closes the app straight away. It closes the open sheet first, then goes to Overview from another tab, and on Overview a second back within 2 seconds exits ("Swipe back again to exit").
+
 ## 0.2.1
 
 - Fix: on n8n 2.46 and newer, the Overview stayed at 0 with "Use cursor to load execution pages" once there were more than 100 executions. Executions now page with n8n's cursor (older n8n keeps working).
