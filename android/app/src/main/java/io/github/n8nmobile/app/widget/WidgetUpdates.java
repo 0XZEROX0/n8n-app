@@ -38,7 +38,12 @@ public final class WidgetUpdates {
             .setMinimumLatency(delayMs)
             .setOverrideDeadline(delayMs + 5_000)
             .build();
-        js.schedule(job); // replaces a pending refresh, so they never pile up
+        try {
+            js.schedule(job); // replaces a pending refresh, so they never pile up
+        } catch (RuntimeException e) {
+            // Never let a refresh that can't be scheduled take the app or the widget down.
+            android.util.Log.w("n8nWidget", "Could not schedule widget refresh", e);
+        }
     }
 
     /** Called when you sign in or out in the app, or leave it. */
