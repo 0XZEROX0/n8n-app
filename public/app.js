@@ -176,14 +176,20 @@ const API = {
     }
   },
   async executions(filter = {}, max = 100) {
-    const out = []; let lastId;
+    const out = []; let cursor; let lastId;
     while (out.length < max) {
       const want = Math.min(100, max - out.length);
-      const page = await api('/executions', { query: { filter, limit: want, lastId } });
+      // n8n 2.46+ pages with an opaque `cursor` (and rejects lastId); older versions page with lastId.
+      const page = await api('/executions', { query: { filter, limit: want, cursor, lastId } });
       const rows = page?.results || (Array.isArray(page) ? page : []);
       out.push(...rows);
-      if (rows.length < want) break;
-      lastId = rows[rows.length - 1].id; // next page: older than this one
+      if (page && 'nextCursor' in page) {
+        if (!page.nextCursor || !rows.length) break;
+        cursor = page.nextCursor;
+      } else {
+        if (rows.length < want) break;
+        lastId = rows[rows.length - 1].id; // older n8n: next page is older than this id
+      }
     }
     return out;
   },
@@ -263,9 +269,12 @@ async function loadAll() {
   if (S.loading) return;
   S.loading = true; S.error = null; render();
   try {
-    const [wfs, exs] = await Promise.all([API.workflows(), API.executions({}, S.prefs.sample || 500)]);
-    S.workflows = wfs.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-    S.executions = exs;
+    // Load both independently, so one failing doesn't blank the other.
+    const [wfs, exs] = await Promise.allSettled([API.workflows(), API.executions({}, S.prefs.sample || 500)]);
+    if (wfs.status === 'fulfilled') S.workflows = wfs.value.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    if (exs.status === 'fulfilled') S.executions = exs.value;
+    const failed = [wfs, exs].filter((r) => r.status === 'rejected').map((r) => r.reason);
+    if (failed.length) throw failed[0];
     S.loadedAt = Date.now();
   } catch (e) {
     S.error = e.message;

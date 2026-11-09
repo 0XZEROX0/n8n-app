@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Fix: on n8n 2.46 and newer, the Overview stayed at 0 with "Use cursor to load execution pages" once there were more than 100 executions. Executions now page with n8n's cursor (older n8n keeps working).
+- Workflows still show if loading executions fails, and the other way round.
+
 ## 0.2.0
 
 - Sign in like n8n itself: enter the address, tap Continue, then email and password. Asks for a two-step verification code (or recovery code) and for a server password (basic auth in front of n8n) when needed. No API key any more.
