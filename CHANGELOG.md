@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0
+
+- The workflow **Flow** tab now draws the workflow like the n8n editor: nodes as blocks with their n8n icons at their saved positions, connected by lines, with If/Loop/error outputs labelled, AI sub-nodes (model, memory, tools) wired in with dashed lines, and sticky notes. Drag to move, pinch or use the buttons to zoom, go full screen, and tap a node to see what it connects to and its settings. Read-only. The old step list is still there under the canvas.
+
 ## 0.2.1
 
 - Fix: on n8n 2.46 and newer, the Overview stayed at 0 with "Use cursor to load execution pages" once there were more than 100 executions. Executions now page with n8n's cursor (older n8n keeps working).

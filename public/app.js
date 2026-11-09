@@ -17,6 +17,11 @@ const ICONS = {
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   play: '<path d="M7 4l13 8-13 8z"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  minus: '<path d="M5 12h14"/>',
+  fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  expand: '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>',
+  shrink: '<path d="M4 14h6v6M20 10h-6V4M10 14l-7 7M14 10l7-7"/>',
 };
 const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[n]}</svg>`;
 
@@ -589,6 +594,7 @@ function openSheet(key, html, onBind) {
 const sheetIsOpen = (key) => sheetStack[sheetStack.length - 1]?.key === key; // only redraw if it's the visible sheet
 function closeSheet() { $('#sheet').hidden = true; $('#sheet-backdrop').hidden = true; document.body.style.overflow = ''; }
 window.addEventListener('popstate', () => {
+  if (flowFullExit) { const f = flowFullExit; flowFullExit = null; f(); return; } // Back leaves a full-screen canvas first
   sheetStack.pop();
   if (sheetStack.length) showSheet(sheetStack[sheetStack.length - 1]); else closeSheet();
 });
@@ -611,6 +617,7 @@ async function openWorkflow(id, tab = 'details') {
       } catch (e) { toast(e.message, true); tg.disabled = false; }
     };
     const run = sh.querySelector('#wf-run'); if (run) run.onclick = () => openRun(wf);
+    if (tab === 'flow') bindFlow(sh, wf, draw);
   });
   const loadRuns = async () => {
     try { runs = await API.executions({ workflowId: id }, 100); } catch (e) { runsErr = e.message; }
@@ -674,15 +681,390 @@ function wfDetailsTab(wf, hist) {
     <a class="btn block" href="${esc(baseUrl())}/workflow/${encodeURIComponent(wf.id)}" target="_blank" rel="noopener">Open editor</a>`;
 }
 
+// ---------- workflow canvas (read-only, like the n8n editor) ----------
+// Nodes sit at their saved editor positions (top-left, in canvas pixels) and connections are drawn as
+// curves between their ports. AI sub-nodes (models, memory, tools…) are circles wired into the bottom of
+// the node that uses them, with dashed lines, as in n8n.
+const AI_INPUT_LABELS = {
+  ai_languageModel: 'Model', ai_memory: 'Memory', ai_tool: 'Tool', ai_outputParser: 'Parser',
+  ai_embedding: 'Embeddings', ai_vectorStore: 'Vector store', ai_document: 'Document', ai_textSplitter: 'Splitter',
+  ai_retriever: 'Retriever', ai_reranker: 'Reranker', ai_chain: 'Chain', ai_agent: 'Agent',
+};
+const AI_ORDER = Object.keys(AI_INPUT_LABELS);
+const isSticky = (n) => n.type === 'n8n-nodes-base.stickyNote';
+const flowViews = {}; // per workflow: { k, tx, ty, auto, sel, full }
+const flowLayouts = new WeakMap();
+let flowFullExit = null; // set while a canvas is full screen, so Android's Back button just leaves full screen
+
+// Node icons, the same files the n8n editor shows. Asked for once per node type and kept in memory.
+// They are fetched through the app's own HTTP path (so a server password in front of n8n still works) and
+// turned into data URLs. If anything fails the node keeps its coloured initials.
+const nodeIcons = store.get('n8n.icons', {}); // type -> data URL | null (no icon) ; missing = not asked yet
+// n8n's own nodes use icons built into its editor ("node:if", "fa:pen"), which can't be downloaded.
+// Draw simple look-alike glyphs for the common ones, in the node's n8n colour.
+const GLYPHS = {
+  branch: 'M6 3v12M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9',
+  merge: 'M6 3v6a6 6 0 0 0 12 0V3M12 15v6',
+  code: 'M16 18l6-6-6-6M8 6l-6 6 6 6',
+  pen: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
+  clock: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2',
+  pointer: 'M4 4l7 17 2.5-7.5L21 11z',
+  globe: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20',
+  hook: 'M12 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM11 8.5L7 15.5M13 8.5l4 7M9 18h6',
+  arrow: 'M5 12h14M13 6l6 6-6 6',
+  form: 'M5 3h14v18H5zM8 8h8M8 12h8M8 16h5',
+  sub: 'M3 3h7v7H3zM14 14h7v7h-7zM10 6.5h4a3 3 0 0 1 3 3V14',
+  reply: 'M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3',
+  split: 'M12 3v8M12 11l-6 10M12 11l6 10',
+  join: 'M6 3l6 10 6-10M12 13v8',
+  chat: 'M21 12a8 8 0 0 1-12 7l-5 2 2-5A8 8 0 1 1 21 12z',
+  db: 'M12 8c4.4 0 8-1.3 8-3s-3.6-3-8-3-8 1.3-8 3 3.6 3 8 3zM4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
+  bot: 'M5 9h14v11H5zM12 4v5M9 14v1M15 14v1M2 13v3M22 13v3',
+  loop: 'M17 2l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3',
+  bolt: 'M13 2L4 14h7l-1 8 9-12h-7z',
+  alert: 'M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z',
+  sort: 'M3 6h18M6 12h12M9 18h6',
+  filter: 'M3 4h18l-7 9v6l-4 2v-8z',
+};
+const GLYPH_FOR = {
+  'if': 'branch', 'switch': 'branch', 'filter': 'filter', 'merge': 'merge', 'code': 'code', 'fa:code': 'code', 'fa:pen': 'pen',
+  'wait': 'clock', 'schedule-trigger': 'clock', 'fa:clock': 'clock', 'manual-trigger': 'pointer', 'fa:mouse-pointer': 'pointer',
+  'http-request': 'globe', 'fa:globe': 'globe', 'webhook': 'hook', 'no-operation': 'arrow', 'fa:arrow-right': 'arrow', 'form-trigger': 'form', 'form': 'form',
+  'sub-workflow-trigger': 'sub', 'execute-sub-workflow': 'sub', 'fa:sign-in-alt': 'sub', 'respond-to-webhook': 'reply',
+  'split-out': 'split', 'aggregate': 'join', 'chat-trigger': 'chat', 'fa:comments': 'chat', 'simple-memory': 'db', 'fa:database': 'db',
+  'ai-agent': 'bot', 'fa:robot': 'bot', 'basic-llm-chain': 'bot', 'fa:link': 'bot', 'fa:th-large': 'loop', 'fa:sync': 'loop', 'fa:sync-alt': 'loop', 'fa:redo': 'loop',
+  'error-trigger': 'alert', 'fa:exclamation-triangle': 'alert', 'fa:bolt': 'bolt', 'sort': 'sort', 'fa:sort': 'sort',
+};
+const ICON_COLORS = {
+  green: '#35a35a', azure: '#2f7fe0', amber: '#e3a008', blue: '#3a64d8', crimson: '#d0342c', neutral: '#8a879a', 'light-blue': '#3d9ee0',
+  teal: '#1a9c92', magenta: '#c43c9a', violet: '#7a4fd8', 'orange-red': '#e2582b', orange: '#ec8a1c', purple: '#8b4fd8', red: '#d6403a',
+  'dark-blue': '#2a4fb0', 'light-green': '#5cb85c', gray: '#8a879a', black: 'var(--text)',
+};
+function glyphFor(d) {
+  const name = typeof d?.icon === 'string' ? d.icon : d?.icon?.light;
+  if (!name) return null;
+  const key = name.startsWith('node:') ? name.slice(5) : name;
+  const g = GLYPH_FOR[key] || (/trigger$/.test(key) ? 'bolt' : null);
+  return g ? { g, c: ICON_COLORS[d.iconColor] || ICON_COLORS[d.defaults?.color] || d.defaults?.color || null } : null;
+}
+const dark = () => !!window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+async function loadNodeIcons(wf) {
+  const want = new Map();
+  (wf.nodes || []).forEach((n) => { if (!isSticky(n) && !(n.type in nodeIcons) && !want.has(n.type)) want.set(n.type, n.typeVersion || 1); });
+  if (!want.size) return false;
+  want.forEach((_, t) => (nodeIcons[t] = null));
+  let types;
+  try { types = await api('/node-types', { method: 'POST', body: { nodeInfos: [...want].map(([name, version]) => ({ name, version })) } }); } catch { return false; }
+  const toDataUrl = (blob) => new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = bad; r.readAsDataURL(blob); });
+  // n8n answers in the order asked, with names that may drop the package prefix ("slack").
+  const asked = [...want.keys()]; const list = Array.isArray(types) ? types : [];
+  const typeOf = (d, i) => (list.length === asked.length ? asked[i] : asked.find((t) => t === d?.name || t.endsWith('.' + d?.name)));
+  await Promise.all(list.map(async (d, i) => {
+    const type = typeOf(d, i);
+    let url = d?.iconUrl; if (url && typeof url === 'object') url = dark() ? url.dark || url.light : url.light || url.dark;
+    if (!type) return;
+    if (typeof url !== 'string') { nodeIcons[type] = glyphFor(d); return; } // built into the n8n editor: draw a look-alike
+    try {
+      const res = await rawFetch('/' + url.replace(/^\/+/, ''), { headers: { Accept: 'image/*' } });
+      if (!res.ok) return;
+      let blob = await res.blob();
+      if (/\.svg$/i.test(url)) blob = new Blob([await blob.text()], { type: 'image/svg+xml' });
+      nodeIcons[type] = await toDataUrl(blob);
+    } catch {}
+  }));
+  // Keep them for next time (small SVGs; skip if the cache would grow past ~600 KB).
+  const keep = Object.fromEntries(Object.entries(nodeIcons).filter(([, v]) => v));
+  if (JSON.stringify(keep).length < 600000) store.set('n8n.icons', keep);
+  return true;
+}
+
+function flowLayout(wf) {
+  if (flowLayouts.has(wf)) return flowLayouts.get(wf);
+  const all = wf.nodes || [];
+  const conns = wf.connections || {};
+  const nodes = all.filter((n) => !isSticky(n));
+  const notes = all.filter(isSticky);
+  const byName = Object.fromEntries(nodes.map((n) => [n.name, { n }]));
+  const raw = []; // { from, type, out, to, in }
+  for (const [from, types] of Object.entries(conns)) {
+    if (!byName[from]) continue;
+    for (const [type, outs] of Object.entries(types || {})) {
+      (outs || []).forEach((branch, out) => (branch || []).forEach((c) => {
+        if (c && byName[c.node]) raw.push({ from, type, out, to: c.node, in: c.index || 0 });
+      }));
+    }
+  }
+  for (const L of Object.values(byName)) {
+    const { n } = L; const p = n.parameters || {};
+    const outs = raw.filter((e) => e.from === n.name);
+    const ins = raw.filter((e) => e.to === n.name);
+    const mainOut = Math.max(0, ...outs.filter((e) => e.type === 'main').map((e) => e.out + 1));
+    const aiOut = outs.some((e) => e.type !== 'main');
+    L.aiIn = [...new Set(ins.filter((e) => e.type !== 'main').map((e) => e.type))]
+      .sort((a, b) => (AI_ORDER.indexOf(a) + 1 || 99) - (AI_ORDER.indexOf(b) + 1 || 99));
+    L.sub = aiOut && !mainOut; // a "sub-node" (model, memory, tool…)
+    L.trigger = isTrigger(n);
+    // outputs
+    const t = n.type.split('.').pop();
+    let labels = [];
+    if (t === 'if') labels = ['true', 'false'];
+    else if (t === 'filter' && n.parameters?.options?.allowedOutputs) labels = ['kept', 'discarded'];
+    else if (t === 'splitInBatches' && (n.typeVersion || 1) >= 3) labels = ['done', 'loop'];
+    let nOut = L.sub ? 0 : Math.max(1, mainOut, labels.length);
+    if (n.onError === 'continueErrorOutput' && !L.sub) {
+      nOut = Math.max(nOut, (labels.length || 1) + 1);
+      while (labels.length < nOut - 1) labels.push('');
+      labels[nOut - 1] = 'error';
+    }
+    L.outLabels = labels; L.nOut = nOut;
+    const mainIn = Math.max(0, ...ins.filter((e) => e.type === 'main').map((e) => e.in + 1));
+    L.nIn = L.trigger || L.sub ? 0 : Math.max(1, mainIn, t === 'merge' ? Number(p.numberInputs) || 2 : 0);
+    // size
+    if (L.sub) { L.w = 80; L.h = 80; } else if (L.aiIn.length) { L.w = Math.max(240, L.aiIn.length * 80 + 40); L.h = 100; } else { L.w = 100; L.h = 100; }
+    const [x, y] = Array.isArray(n.position) ? n.position : [0, 0];
+    L.x = Number(x) || 0; L.y = Number(y) || 0;
+  }
+  const outPt = (L, i) => [L.x + L.w, L.y + (L.h * (i + 1)) / (L.nOut + 1)];
+  const inPt = (L, i) => [L.x, L.y + (L.h * (i + 1)) / (L.nIn + 1)];
+  const aiPt = (L, type) => { const i = Math.max(0, L.aiIn.indexOf(type)); return [L.x + (L.w * (i + 1)) / (L.aiIn.length + 1), L.y + L.h]; };
+  const edges = raw.map((e) => {
+    const A = byName[e.from], B = byName[e.to];
+    if (e.type !== 'main') {
+      const [sx, sy] = [A.x + A.w / 2, A.y]; const [tx, ty] = aiPt(B, e.type);
+      const dy = Math.max(30, Math.abs(sy - ty) / 2);
+      return { ...e, ai: true, d: `M${sx},${sy} C${sx},${sy - dy} ${tx},${ty + dy} ${tx},${ty}` };
+    }
+    const [sx, sy] = outPt(A, Math.min(e.out, A.nOut - 1)); const [tx, ty] = inPt(B, Math.min(e.in, Math.max(0, B.nIn - 1)));
+    const err = A.outLabels[e.out] === 'error';
+    if (tx - sx >= 40) {
+      const c = Math.max(40, (tx - sx) / 2);
+      return { ...e, err, d: `M${sx},${sy} C${sx + c},${sy} ${tx - c},${ty} ${tx},${ty}` };
+    }
+    // Goes backwards (a loop): run under both nodes, like n8n does.
+    const by = Math.max(A.y + A.h, B.y + B.h) + 50;
+    return { ...e, err, d: `M${sx},${sy} C${sx + 60},${sy} ${sx + 60},${by} ${sx},${by} L${tx},${by} C${tx - 60},${by} ${tx - 60},${ty} ${tx},${ty}` };
+  });
+  // bounds, including labels under nodes and sticky notes
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const grow = (x1, y1, x2, y2) => { minX = Math.min(minX, x1); minY = Math.min(minY, y1); maxX = Math.max(maxX, x2); maxY = Math.max(maxY, y2); };
+  Object.values(byName).forEach((L) => grow(L.x - 30, L.y - 10, L.x + L.w + 30, L.y + L.h + (L.aiIn.length ? 40 : 52)));
+  edges.forEach((e) => (e.d.match(/-?\d+(\.\d+)?,-?\d+(\.\d+)?/g) || []).forEach((pt) => { const [x, y] = pt.split(',').map(Number); grow(x, y, x, y); }));
+  const stickies = notes.map((n) => {
+    const p = n.parameters || {}; const [x, y] = Array.isArray(n.position) ? n.position : [0, 0];
+    const s = { n, x: Number(x) || 0, y: Number(y) || 0, w: Number(p.width) || 240, h: Number(p.height) || 160, color: Number(p.color) || 1, text: String(p.content || '') };
+    grow(s.x, s.y, s.x + s.w, s.y + s.h); return s;
+  });
+  if (minX === Infinity) { minX = 0; minY = 0; maxX = 100; maxY = 100; }
+  const out = { nodes: byName, edges, stickies, raw, box: { x: minX, y: minY, w: maxX - minX, h: maxY - minY } };
+  flowLayouts.set(wf, out);
+  return out;
+}
+
+function nodeShape(L) {
+  const { x, y, w, h } = L;
+  if (L.sub) return `<circle cx="${x + w / 2}" cy="${y + h / 2}" r="${w / 2}"/>`;
+  if (L.trigger) {
+    const R = 36, r = 8;
+    return `<path d="M${x + R},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} H${x + R} A${R},${R} 0 0 1 ${x},${y + h - R} V${y + R} A${R},${R} 0 0 1 ${x + R},${y} Z"/>`;
+  }
+  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8"/>`;
+}
+
+function wrapLabel(text, perLine, maxLines) {
+  const words = String(text).split(/\s+/); const lines = []; let cur = '';
+  for (const wd of words) {
+    if (!cur) cur = wd; else if ((cur + ' ' + wd).length <= perLine) cur += ' ' + wd; else { lines.push(cur); cur = wd; }
+  }
+  if (cur) lines.push(cur);
+  const out = lines.slice(0, maxLines).map((l) => (l.length > perLine ? l.slice(0, perLine - 1) + '…' : l));
+  if (lines.length > maxLines) out[maxLines - 1] = out[maxLines - 1].replace(/…?$/, '').slice(0, perLine - 1) + '…';
+  return out;
+}
+
+function stickyText(md) {
+  return md.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/^#+\s*/gm, '').replace(/[*_`~]/g, '').trim();
+}
+
+function flowSvgInner(wf, sel) {
+  const F = flowLayout(wf);
+  const stickies = F.stickies.map((s) => `<g class="fs fs-${Math.min(7, Math.max(1, s.color))}">
+      <rect x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" rx="6"/>
+      <foreignObject x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}"><div xmlns="http://www.w3.org/1999/xhtml" class="fs-text">${esc(stickyText(s.text))}</div></foreignObject>
+    </g>`).join('');
+  const edges = F.edges.map((e) => `<path class="fe${e.ai ? ' ai' : ''}${e.err ? ' err' : ''}${sel && (e.from === sel || e.to === sel) ? ' hl' : ''}" d="${e.d}"${e.ai ? '' : ' marker-end="url(#fa)"'}/>`).join('');
+  const nodes = Object.values(F.nodes).map((L) => {
+    const { n, x, y, w, h } = L; const cx = x + w / 2, cy = y + h / 2;
+    const col = `hsl(${hue(n.type)} 60% 46%)`;
+    const ports = [];
+    for (let i = 0; i < L.nIn; i++) ports.push(`<rect class="fp" x="${x - 4}" y="${y + (h * (i + 1)) / (L.nIn + 1) - 6}" width="8" height="12" rx="2"/>`);
+    for (let i = 0; i < L.nOut; i++) {
+      const py = y + (h * (i + 1)) / (L.nOut + 1); const lab = L.outLabels[i];
+      ports.push(`<circle class="fp" cx="${x + w}" cy="${py}" r="6"/>`);
+      if (lab) ports.push(`<text class="fpl${lab === 'error' ? ' err' : ''}" x="${x + w + 10}" y="${py - 8}">${esc(lab)}</text>`);
+    }
+    L.aiIn.forEach((t, i) => {
+      const px = x + (w * (i + 1)) / (L.aiIn.length + 1);
+      ports.push(`<path class="fp" d="M${px},${y + h - 6} l6,6 l-6,6 l-6,-6 z"/><text class="fpl mid" x="${px}" y="${y + h + 24}">${esc(AI_INPUT_LABELS[t] || t.replace(/^ai_/, ''))}</text>`);
+    });
+    if (L.sub) ports.push(`<path class="fp" d="M${cx},${y - 6} l6,6 l-6,6 l-6,-6 z"/>`);
+    const lines = wrapLabel(n.name, L.aiIn.length ? 30 : 18, 2);
+    const ly = L.aiIn.length ? y + h + 44 : y + h + 20;
+    const label = L.aiIn.length
+      ? wrapLabel(n.name, Math.floor((w - 74) / 7.5), 2).map((l, i, a) => `<text class="fn-in" x="${x + 64}" y="${cy + 5 - (a.length - 1) * 8 + i * 16}">${esc(l)}</text>`).join('')
+      : lines.map((l, i) => `<text class="fn-name" x="${cx}" y="${ly + i * 16}">${esc(l)}</text>`).join('');
+    const icoX = L.aiIn.length ? x + 34 : cx;
+    return `<g class="fnode${n.disabled ? ' off' : ''}${sel === n.name ? ' sel' : ''}" data-node="${esc(n.name)}">
+      <g class="fbody">${nodeShape(L)}</g>
+      ${nodeIcons[n.type]?.g && GLYPHS[nodeIcons[n.type].g]
+        ? `<svg x="${icoX - 18}" y="${cy - 18}" width="36" height="36" viewBox="0 0 24 24" class="fglyph" style="stroke:${esc(nodeIcons[n.type].c || `hsl(${hue(n.type)} 60% 46%)`)}"><path d="${GLYPHS[nodeIcons[n.type].g]}"/></svg>`
+        : typeof nodeIcons[n.type] === 'string'
+        ? `<image href="${esc(nodeIcons[n.type])}" x="${icoX - 20}" y="${cy - 20}" width="40" height="40" preserveAspectRatio="xMidYMid meet"/>`
+        : `<rect x="${icoX - 20}" y="${cy - 20}" width="40" height="40" rx="10" fill="${col}"/>
+      <text class="fico" x="${icoX}" y="${cy + 6}">${esc(initials(shortType(n.type)))}</text>`}
+      ${L.trigger ? `<path class="fbolt" d="M${x - 22},${cy - 12} l-7,13 h6 l-3,11 l9,-15 h-6 l4,-9 z"/>` : ''}
+      ${n.disabled ? `<line class="foff" x1="${x + 6}" y1="${y + 6}" x2="${x + w - 6}" y2="${y + h - 6}"/>` : ''}
+      ${ports.join('')}
+      ${label}
+    </g>`;
+  }).join('');
+  return `<defs><marker id="fa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="fah"/></marker>
+    <pattern id="fdots" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" class="fdot"/></pattern></defs>
+    ${stickies}<g class="fedges">${edges}</g>${nodes}`;
+}
+
 function wfFlowTab(wf) {
-  const nodes = orderedNodes(wf);
-  if (!nodes.length) return '<div class="card empty">This workflow has no nodes.</div>';
-  return `<p class="help">Nodes in the order data flows through them, starting from the trigger.</p>
-  <div class="flow">${nodes.map((n, i) => `${i ? '<div class="connector"></div>' : ''}
-    <div class="node ${n.disabled ? 'disabled' : ''}">
-      <div class="n-ico" style="${isTrigger(n) ? 'background:var(--accent);color:#fff' : ''}">${esc(initials(shortType(n.type)))}</div>
-      <div class="n-main"><div class="n-name">${esc(n.name)}</div><div class="n-type">${esc(shortType(n.type))}${n.disabled ? ' · disabled' : ''}</div></div>
-    </div>`).join('')}</div>`;
+  const real = (wf.nodes || []).filter((n) => !isSticky(n));
+  if (!real.length) return '<div class="card empty">This workflow has no nodes.</div>';
+  const v = flowViews[wf.id] || {};
+  const steps = orderedNodes(wf).filter((n) => !isSticky(n));
+  return `<div class="fcanvas${v.full ? ' full' : ''}" id="fcanvas">
+      <svg class="fsvg" xmlns="http://www.w3.org/2000/svg"><rect class="fbg" width="100%" height="100%"/>
+        <g class="fview">${flowSvgInner(wf, v.sel)}</g></svg>
+      <div class="ftools">
+        <button class="icon-btn" data-fz="in" aria-label="Zoom in">${icon('plus')}</button>
+        <button class="icon-btn" data-fz="out" aria-label="Zoom out">${icon('minus')}</button>
+        <button class="icon-btn" data-fz="fit" aria-label="Fit to screen">${icon('fit')}</button>
+        <button class="icon-btn" data-fz="full" aria-label="Full screen">${icon(v.full ? 'shrink' : 'expand')}</button>
+      </div>
+      <div class="finfo" id="finfo" ${v.sel ? '' : 'hidden'}>${v.sel ? flowInfoHtml(wf, v.sel) : ''}</div>
+    </div>
+    <p class="help">Drag to move, pinch to zoom, tap a node for its details. Read-only: edit in n8n.</p>
+    <details class="fsteps"><summary>Steps as a list (${steps.length})</summary>
+    <div class="flow">${steps.map((n, i) => `${i ? '<div class="connector"></div>' : ''}
+      <div class="node ${n.disabled ? 'disabled' : ''}">
+        <div class="n-ico" style="${isTrigger(n) ? 'background:var(--accent);color:#fff' : ''}">${esc(initials(shortType(n.type)))}</div>
+        <div class="n-main"><div class="n-name">${esc(n.name)}</div><div class="n-type">${esc(shortType(n.type))}${n.disabled ? ' · disabled' : ''}</div></div>
+      </div>`).join('')}</div></details>`;
+}
+
+function flowInfoHtml(wf, name) {
+  const F = flowLayout(wf); const L = F.nodes[name]; if (!L) return '';
+  const { n } = L;
+  const to = [...new Set(F.raw.filter((e) => e.from === name).map((e) => e.to))];
+  const from = [...new Set(F.raw.filter((e) => e.to === name).map((e) => e.from))];
+  const params = n.parameters && Object.keys(n.parameters).length ? JSON.stringify(n.parameters, null, 2) : '';
+  return `<div class="finfo-head"><div class="finfo-title"><b>${esc(n.name)}</b><span>${esc(shortType(n.type))}${n.typeVersion ? ' · v' + esc(n.typeVersion) : ''}${n.disabled ? ' · deactivated' : ''}${L.trigger ? ' · trigger' : ''}</span></div>
+      <button class="icon-btn" data-fclose aria-label="Close">${icon('close')}</button></div>
+    ${n.notes ? `<div class="finfo-notes">${esc(n.notes)}</div>` : ''}
+    <dl class="kv">
+      ${from.length ? `<dt>From</dt><dd>${from.map((x) => `<a href="#" data-fgo="${esc(x)}">${esc(x)}</a>`).join(', ')}</dd>` : ''}
+      ${to.length ? `<dt>Goes to</dt><dd>${to.map((x) => `<a href="#" data-fgo="${esc(x)}">${esc(x)}</a>`).join(', ')}</dd>` : ''}
+      ${n.credentials ? `<dt>Credentials</dt><dd>${Object.values(n.credentials).map((c) => esc(c?.name || '')).join(', ')}</dd>` : ''}
+    </dl>
+    ${params ? `<details><summary>Settings</summary><pre class="json">${esc(params)}</pre></details>` : ''}`;
+}
+
+function bindFlow(root, wf, redraw) {
+  const box = root.querySelector('#fcanvas'); if (!box) return;
+  const svg = box.querySelector('svg'); const g = svg.querySelector('.fview');
+  const v = (flowViews[wf.id] ||= { k: 1, tx: 0, ty: 0, auto: true, sel: null, full: false });
+  const F = flowLayout(wf);
+  const apply = () => g.setAttribute('transform', `translate(${v.tx},${v.ty}) scale(${v.k})`);
+  const clampK = (k) => Math.min(3, Math.max(0.12, k));
+  // Fit the whole workflow, but never so small that names can't be read on a phone: then start at
+  // the left (where the trigger usually is) and let the user drag along.
+  const fit = (all) => {
+    const W = svg.clientWidth || 300, H = svg.clientHeight || 300, pad = 24, b = F.box;
+    const whole = Math.min((W - pad * 2) / b.w, (H - pad * 2) / b.h, 1.2);
+    v.k = clampK(all ? whole : Math.max(whole, Math.min(0.55, (H - pad * 2) / b.h)));
+    v.tx = b.w * v.k <= W - pad * 2 ? (W - b.w * v.k) / 2 - b.x * v.k : pad - b.x * v.k;
+    v.ty = b.h * v.k <= H - pad * 2 ? (H - b.h * v.k) / 2 - b.y * v.k : pad - b.y * v.k;
+    apply();
+  };
+  const zoomAt = (k, px, py) => {
+    k = clampK(k); v.tx = px - ((px - v.tx) * k) / v.k; v.ty = py - ((py - v.ty) * k) / v.k; v.k = k; v.auto = false; apply();
+  };
+  if (v.auto) requestAnimationFrame(() => fit()); else apply();
+
+  const info = box.querySelector('#finfo');
+  const select = (name, center) => {
+    v.sel = name;
+    g.innerHTML = flowSvgInner(wf, name);
+    info.hidden = !name; info.innerHTML = name ? flowInfoHtml(wf, name) : '';
+    bindInfo();
+    if (name && center) {
+      const L = F.nodes[name]; const W = svg.clientWidth, H = svg.clientHeight;
+      v.tx = W / 2 - (L.x + L.w / 2) * v.k; v.ty = H / 3 - (L.y + L.h / 2) * v.k; v.auto = false; apply();
+    }
+  };
+  const bindInfo = () => {
+    info.querySelector('[data-fclose]')?.addEventListener('click', () => select(null));
+    info.querySelectorAll('[data-fgo]').forEach((a) => a.addEventListener('click', (ev) => { ev.preventDefault(); select(a.dataset.fgo, true); }));
+  };
+  bindInfo();
+  loadNodeIcons(wf).then((got) => { if (got && box.isConnected) g.innerHTML = flowSvgInner(wf, v.sel); });
+
+  box.querySelectorAll('[data-fz]').forEach((b) => (b.onclick = () => {
+    const W = svg.clientWidth, H = svg.clientHeight;
+    if (b.dataset.fz === 'in') zoomAt(v.k * 1.3, W / 2, H / 2);
+    if (b.dataset.fz === 'out') zoomAt(v.k / 1.3, W / 2, H / 2);
+    if (b.dataset.fz === 'fit') { v.auto = false; fit(true); }
+    if (b.dataset.fz === 'full') {
+      if (v.full) { history.back(); return; } // popstate runs flowFullExit
+      v.full = true; v.auto = true; history.pushState({ flowFull: 1 }, '');
+      flowFullExit = () => { v.full = false; v.auto = true; redraw(); };
+      redraw();
+    }
+  }));
+
+  // Pan with one finger (or the mouse), pinch with two.
+  const pts = new Map(); let start = null; let moved = false;
+  const local = (ev) => { const r = svg.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; };
+  const snapshot = () => {
+    const p = [...pts.values()];
+    if (p.length >= 2) {
+      const [a, b] = p; start = { k: v.k, tx: v.tx, ty: v.ty, d: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, mx: (a[0] + b[0]) / 2, my: (a[1] + b[1]) / 2 };
+    } else if (p.length === 1) start = { k: v.k, tx: v.tx, ty: v.ty, x: p[0][0], y: p[0][1] };
+  };
+  svg.addEventListener('pointerdown', (ev) => {
+    svg.setPointerCapture?.(ev.pointerId); pts.set(ev.pointerId, local(ev)); if (pts.size === 1) moved = false; snapshot();
+  });
+  svg.addEventListener('pointermove', (ev) => {
+    if (!pts.has(ev.pointerId)) return; pts.set(ev.pointerId, local(ev)); const p = [...pts.values()];
+    if (p.length >= 2 && start?.d) {
+      const [a, b] = p; const d = Math.hypot(a[0] - b[0], a[1] - b[1]); const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+      const k = clampK(start.k * (d / start.d));
+      v.tx = mx - ((start.mx - start.tx) * k) / start.k; v.ty = my - ((start.my - start.ty) * k) / start.k; v.k = k;
+      moved = true; v.auto = false; apply();
+    } else if (p.length === 1 && start && start.x != null) {
+      const dx = p[0][0] - start.x, dy = p[0][1] - start.y;
+      if (!moved && Math.hypot(dx, dy) < 6) return;
+      moved = true; v.auto = false; v.tx = start.tx + dx; v.ty = start.ty + dy; apply();
+    }
+  });
+  const end = (ev) => {
+    if (!pts.has(ev.pointerId)) return;
+    pts.delete(ev.pointerId);
+    if (!pts.size && !moved && ev.type === 'pointerup') {
+      const hit = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-node]');
+      select(hit ? hit.dataset.node : null);
+    }
+    snapshot();
+  };
+  svg.addEventListener('pointerup', end); svg.addEventListener('pointercancel', end);
+  svg.addEventListener('wheel', (ev) => {
+    ev.preventDefault(); const [x, y] = local(ev); zoomAt(v.k * Math.exp(-ev.deltaY * 0.0015), x, y);
+  }, { passive: false });
 }
 
 function wfRunsTab(runs) {

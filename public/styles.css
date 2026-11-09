@@ -179,3 +179,56 @@ pre.json { background: var(--surface-2); border-radius: 10px; padding: 10px; fon
 }
 .toast.bad { background: var(--bad); color: #fff; }
 .spacer { height: 24px; }
+
+/* Workflow canvas (read-only, like the n8n editor) */
+.fcanvas { position: relative; height: min(64vh, 560px); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface-2); --fc-node: var(--surface); --fc-line: #9b98ad; }
+@media (prefers-color-scheme: dark) { .fcanvas { --fc-line: #75718c; } }
+.fcanvas.full { position: fixed; inset: 0; height: auto; z-index: 30; border-radius: 0; border: 0; padding-top: env(safe-area-inset-top); }
+.fsvg { display: block; width: 100%; height: 100%; touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; }
+.fsvg:active { cursor: grabbing; }
+.fbg { fill: url(#fdots); }
+.fdot { fill: var(--border); }
+.fe { fill: none; stroke: var(--fc-line); stroke-width: 2; }
+.fe.ai { stroke-dasharray: 6 5; }
+.fe.err { stroke: var(--bad); }
+.fe.hl { stroke: var(--accent); stroke-width: 3; }
+.fah { fill: var(--fc-line); }
+.fnode { cursor: pointer; }
+.fbody > * { fill: var(--fc-node); stroke: var(--fc-line); stroke-width: 2; }
+.fnode.sel .fbody > * { stroke: var(--accent); stroke-width: 3; }
+.fnode.off { opacity: .5; }
+.foff { stroke: var(--muted); stroke-width: 2; }
+.fico { fill: #fff; font-size: 15px; font-weight: 700; text-anchor: middle; pointer-events: none; }
+.fp { fill: var(--fc-line); }
+.fpl { fill: var(--muted); font-size: 11px; }
+.fpl.mid { text-anchor: middle; }
+.fpl.err { fill: var(--bad); }
+.fbolt { fill: var(--accent); }
+.fn-name { fill: var(--text); font-size: 13px; font-weight: 600; text-anchor: middle; }
+.fn-in { fill: var(--text); font-size: 13px; font-weight: 600; }
+.fs rect { stroke: none; }
+.fs-1 rect { fill: #fff5d6; } .fs-2 rect { fill: #fde9d9; } .fs-3 rect { fill: #fbdadd; } .fs-4 rect { fill: #e3f5e5; }
+.fs-5 rect { fill: #dfecfb; } .fs-6 rect { fill: #e9e3fb; } .fs-7 rect { fill: #ececf0; }
+@media (prefers-color-scheme: dark) {
+  .fs-1 rect { fill: #3d3520; } .fs-2 rect { fill: #3d2a1f; } .fs-3 rect { fill: #3f2125; } .fs-4 rect { fill: #1f3525; }
+  .fs-5 rect { fill: #1f2c40; } .fs-6 rect { fill: #2c2442; } .fs-7 rect { fill: #2c2b33; }
+}
+.fs-text { padding: 10px 12px; font-size: 13px; line-height: 1.4; color: var(--text); white-space: pre-wrap; overflow: hidden; height: 100%; box-sizing: border-box; }
+.ftools { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 6px; }
+.fcanvas.full .ftools { top: calc(8px + env(safe-area-inset-top)); }
+.ftools .icon-btn { background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); }
+.ftools .icon-btn svg { width: 18px; height: 18px; }
+.finfo { position: absolute; left: 8px; right: 8px; bottom: 8px; max-height: 55%; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; box-shadow: 0 6px 24px rgba(0,0,0,.18); font-size: 14px; }
+.fcanvas.full .finfo { bottom: calc(8px + env(safe-area-inset-bottom)); }
+.finfo-head { display: flex; gap: 10px; align-items: flex-start; }
+.finfo-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.finfo-title b { word-break: break-word; }
+.finfo-title span { color: var(--muted); font-size: 12px; }
+.finfo .icon-btn { width: 32px; height: 32px; }
+.finfo-notes { margin-top: 6px; color: var(--muted); white-space: pre-wrap; }
+.finfo .kv { margin-top: 8px; }
+.finfo details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin: 6px 0; }
+.fsteps { margin-top: 4px; }
+.fsteps summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600; margin-bottom: 10px; }
+.fglyph { fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.finfo .kv dd { word-break: break-word; text-align: left; }
