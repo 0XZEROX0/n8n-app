@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- **Edit workflows from the phone.** Rename a workflow and change its description. In the **Flow** tab, tap a step and then **Edit** to change its fields (the same fields the n8n editor shows, following your choices such as Resource and Operation; anything complex, or the whole step, can be edited as JSON), its credential, its name (expressions like `$('Old name')` are updated), whether it is enabled, and its settings (retry on fail, on error, always output data, execute once, notes). Connect and disconnect steps, including If/Switch outputs, Merge inputs and AI models/memory/tools.
+- Drag a selected step to move it. **Add after** or the pink **+** adds any step your n8n has, searchable; **Delete** removes a step and joins its neighbours like n8n does.
+- Edits are kept as a draft with an **Unsaved changes** bar (Save / Discard) and a Save button in full screen; closing the workflow asks before throwing changes away. On n8n 2.x, a saved change to a published workflow shows **Publish changes**.
+
 ## 0.3.0
 
 - The workflow **Flow** tab now draws the workflow like the n8n editor: nodes as blocks with their n8n icons at their saved positions, connected by lines, with If/Loop/error outputs labelled, AI sub-nodes (model, memory, tools) wired in with dashed lines, node groups as titled dashed frames, and sticky notes, in n8n's own canvas colours. Drag to move, pinch or use the buttons to zoom, go full screen, and tap a node to see what it connects to and its settings. Read-only. The old step list is still there under the canvas.
