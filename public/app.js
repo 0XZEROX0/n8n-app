@@ -614,6 +614,8 @@ window.n8nBack = () => {
   lastBackAt = Date.now(); toast('Swipe back again to exit', false, 2000);
   return 'handled';
 };
+// The Android home screen widget opens a workflow with this (MainActivity.openWorkflow).
+window.n8nOpenWorkflow = (id) => { if (S.conn) openWorkflow(String(id)); return 'ok'; };
 const sheetHead = (title, extra = '') => `<div class="sheet-head"><h2>${title}</h2>${extra}<button class="icon-btn" data-close aria-label="Close">${icon('close')}</button></div>`;
 
 // ---------- workflow detail ----------

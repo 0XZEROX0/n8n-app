@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One workflow: name, last run status, play button. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/tile"
+    android:layout_width="0dp"
+    android:layout_height="match_parent"
+    android:layout_margin="3dp"
+    android:layout_weight="1"
+    android:background="@drawable/widget_tile_bg"
+    android:orientation="vertical"
+    android:padding="7dp">
+
+    <TextView
+        android:id="@+id/tile_name"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:gravity="top|start"
+        android:maxLines="3"
+        android:textColor="@color/widget_text"
+        android:textSize="12sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageView
+            android:id="@+id/tile_dot"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/widget_dot_idle" />
+
+        <TextView
+            android:id="@+id/tile_status"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:paddingStart="4dp"
+            android:paddingEnd="2dp"
+            android:singleLine="true"
+            android:textColor="@color/widget_text_dim"
+            android:textSize="10sp" />
+
+        <ImageView
+            android:id="@+id/tile_play"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:background="@drawable/widget_play_bg"
+            android:contentDescription="Run workflow"
+            android:padding="6dp"
+            android:src="@drawable/widget_ic_play" />
+    </LinearLayout>
+</LinearLayout>

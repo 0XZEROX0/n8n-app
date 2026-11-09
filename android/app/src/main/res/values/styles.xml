@@ -19,4 +19,7 @@
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
     </style>
+
+    <!-- Screen that picks the workflows a home screen widget shows. -->
+    <style name="WidgetConfigTheme" parent="Theme.AppCompat.DayNight.NoActionBar" />
 </resources>
