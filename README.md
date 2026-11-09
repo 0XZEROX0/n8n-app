@@ -16,7 +16,7 @@ More docs: [Android APK](docs/android.md) · [Deployment](docs/deployment.md) ·
 
 - **Overview**: succeeded vs failed executions, success rate, longest execution (and which workflow), average duration, active workflow count, the workflows that fail most, and the longest-running ones.
 - **Workflows**: one card per workflow with Active/Inactive, Published / Unpublished changes / Not published (n8n 2.x), trigger type, tags, ID, success/fail counts and last edit. Search and filter (active, inactive, has failures, archived).
-- **Workflow details**: ID, owner, created/edited dates, nodes, triggers, settings, a *Flow* view of the nodes in order, a *Runs* tab with that workflow's stats, and a *History* tab (current and published version; see limits below). Activate / deactivate from the phone.
+- **Workflow details**: ID, owner, created/edited dates, nodes, triggers, settings, a *Flow* tab that draws the workflow like the n8n editor (nodes as blocks with their icons, connections as lines, AI sub-nodes, sticky notes; drag, pinch to zoom, full screen, tap a node for its details; read-only), a *Runs* tab with that workflow's stats, and a *History* tab (current and published version; see limits below). Activate / deactivate from the phone.
 - **Run**: workflows with a Webhook trigger get a Run button (method, path, JSON body, optional auth headers) and show the response. Form triggers open the form.
 - **Executions**: filter by status, open any run to see each step, its time, items, the error message, and the output. Retry failed runs.
 

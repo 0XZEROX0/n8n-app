@@ -13,6 +13,7 @@ The app signs in like the n8n editor does and uses n8n's own REST API (`/rest`),
 | Workflow details | `GET /rest/workflows/{id}` |
 | Activate / deactivate | `POST /rest/workflows/{id}/activate` `{ versionId }`, `/deactivate` (older n8n: `PATCH` with `active`) |
 | Run now | `POST /rest/workflows/{id}/run` `{ workflowData, triggerToStartFrom: { name } }` |
+| Node icons (Flow tab) | `POST /rest/node-types` `{ nodeInfos: [{ name, version }] }`, then each type's `iconUrl` (e.g. `icons/n8n-nodes-base/dist/nodes/Slack/slack.svg`) |
 | Edit history | `GET /rest/workflow-history/workflow/{id}?take=50&skip=0` |
 | Executions | `GET /rest/executions?filter={...}&limit=&lastId=` → `{ results, count }` |
 | Execution steps | `GET /rest/executions/{id}`; its `data` is in "flatted" form, decoded in the app |
