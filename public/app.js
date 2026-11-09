@@ -56,9 +56,9 @@ function initials(name) {
   return ((w[0]?.[0] || '?') + (w[1]?.[0] || '')).toUpperCase();
 }
 let toastTimer;
-function toast(msg, bad = false) {
+function toast(msg, bad = false, ms = 3500) {
   const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (bad ? ' bad' : ''); t.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 3500);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), ms);
 }
 
 // ---------- storage ----------
@@ -598,6 +598,22 @@ window.addEventListener('popstate', () => {
   sheetStack.pop();
   if (sheetStack.length) showSheet(sheetStack[sheetStack.length - 1]); else closeSheet();
 });
+
+// ---------- Android back (edge swipe / back button) ----------
+// MainActivity asks this before Android handles back: 'handled' keeps the app open, 'exit' lets it close.
+// Order: close the top overlay or sheet, then go to Overview, then "swipe again to exit" within 2 s.
+// Full-screen views that aren't sheets can register a closer: const off = onBack(() => close()); call off() when closed.
+const backClosers = [];
+function onBack(fn) { backClosers.push(fn); return () => { const i = backClosers.lastIndexOf(fn); if (i >= 0) backClosers.splice(i, 1); }; }
+let lastBackAt = 0;
+window.n8nBack = () => {
+  if (backClosers.length) { backClosers.pop()(); return 'handled'; }
+  if (sheetStack.length) { history.back(); return 'handled'; }
+  if (S.conn && S.tab !== 'overview') { S.tab = 'overview'; render(); window.scrollTo(0, 0); lastBackAt = 0; return 'handled'; }
+  if (Date.now() - lastBackAt < 2000) return 'exit';
+  lastBackAt = Date.now(); toast('Swipe back again to exit', false, 2000);
+  return 'handled';
+};
 const sheetHead = (title, extra = '') => `<div class="sheet-head"><h2>${title}</h2>${extra}<button class="icon-btn" data-close aria-label="Close">${icon('close')}</button></div>`;
 
 // ---------- workflow detail ----------
