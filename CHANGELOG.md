@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Widget: the "pick workflows" screen now looks like the app (its colours, light or dark with your phone): a search box, each workflow as a card with how it starts and whether it is active, a numbered pink badge for the order you picked, a "3 picked" counter, and app-style buttons.
 - Widget: fits as many workflows as there is room for instead of one per 2x2 cells, with no empty space: 3x3 and 4x3 now show 4 workflows (was 1 and 2), and tiles centre their content.
 - **Select several workflows at once.** On the Workflows tab, tap **Select** (or press and hold a workflow), tick the ones you want, or **All** for everything the current filter and search show. The bar at the bottom then **Publishes** (Activates on older n8n), **Deactivates**, **Archives** / **Unarchives** or **Deletes** them all, each button showing how many it applies to. Every action asks first and lists the workflows; delete says it can't be undone. Any that fail are listed with n8n's reason. Back (swipe or button) or ✕ stops selecting.
 - Widget: sizes are now worked out right on current phones. A 3x3 widget was treated as 4x4 and squeezed in four tiles, which cut off their play buttons; it now shows one workflow per 2x2 space as intended (3x3 = 1, 4x4 = 4).

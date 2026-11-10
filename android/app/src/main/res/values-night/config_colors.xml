@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="cfg_bg">#FF14131B</color>
+    <color name="cfg_surface">#FF1F1D2B</color>
+    <color name="cfg_surface2">#FF29273A</color>
+    <color name="cfg_text">#FFF1EFF8</color>
+    <color name="cfg_muted">#FFA4A0B8</color>
+    <color name="cfg_border">#FF353248</color>
+    <color name="cfg_accent">#FFEA4B71</color>
+    <color name="cfg_accent_soft">#29EA4B71</color>
+    <color name="cfg_ok">#FF4CC583</color>
+    <color name="cfg_bad">#FFFF6B63</color>
+</resources>
