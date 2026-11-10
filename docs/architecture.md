@@ -41,7 +41,7 @@ Native Java in `android/app/src/main/java/io/github/n8nmobile/app/widget/` (a wi
 | File | What it does |
 | --- | --- |
 | `WorkflowWidgetProvider` | The widget. Play button starts a workflow, ↻ refreshes, resizing redraws. |
-| `WidgetRenderer` | Draws one tile per 2x2 block of home screen cells (cells ≈ (size in dp + 30) / 70) from the cached status; compact tile below 2x2. |
+| `WidgetRenderer` | Draws one tile per 2x2 block of home screen cells (cells ≈ width / 95 dp and height / 110 dp, the cell size of current phone launchers) from the cached status; compact tile below 2x2. |
 | `WidgetUpdates` + `WidgetRefreshJob` | Background refresh (JobScheduler): workflow list + last 10 executions per shown workflow; polls every 10 s while a run is starting or running. |
 | `N8nClient` | n8n `/rest` calls with the app's session cookie and browser id; run = same `/workflows/:id/run` as the app's Run now, or the production webhook. |
 | `WidgetConfigActivity` | Picks and orders the workflows of a widget. |

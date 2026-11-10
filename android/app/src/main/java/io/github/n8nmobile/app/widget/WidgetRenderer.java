@@ -39,15 +39,24 @@ final class WidgetRenderer {
         m.updateAppWidget(widgetId, build(c, widgetId, m.getAppWidgetOptions(widgetId)));
     }
 
-    /** Home screen cells from a size in dp (Android's own sizing rule: n cells ≈ 70n − 30 dp). */
-    static int cells(int dp, int fallback, int max) {
+    /**
+     * Home screen cells from the widget's real size in dp. Today's phones (Samsung One UI,
+     * Pixel) use cells of about 95dp wide and 110dp tall in portrait. Android's old rule
+     * (70n − 30 dp) counted far too many cells there: a 3x3 widget came out as 4x4 and got
+     * four cramped tiles.
+     */
+    static int cells(int dp, double cellDp, int fallback, int max) {
         if (dp <= 0) return fallback;
-        return Math.max(1, Math.min(max, (dp + 30) / 70));
+        return Math.max(1, Math.min(max, (int) Math.round(dp / cellDp)));
     }
 
     static RemoteViews build(Context c, int widgetId, Bundle opts) {
-        int cellsW = cells(opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH), 2, MAX_CELLS);
-        int cellsH = cells(opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT), 2, MAX_CELLS);
+        // In portrait (how home screens are mostly used) the widget is minWidth wide and maxHeight tall.
+        int wDp = opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH);
+        int hDp = opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT);
+        if (hDp <= 0 && opts != null) hDp = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT);
+        int cellsW = cells(wDp, 95, 2, MAX_CELLS);
+        int cellsH = cells(hDp, 110, 2, MAX_CELLS);
         // One workflow per 2x2 block; a narrow or flat widget gets compact tiles.
         boolean full = cellsW >= 2 && cellsH >= 2;
         int cols = Math.max(1, cellsW / 2);
