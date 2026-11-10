@@ -26,7 +26,8 @@ import org.json.JSONObject;
  * 2x2 it still shows one workflow, in a compact tile.
  */
 final class WidgetRenderer {
-    private static final int MAX_CELLS = 8;
+    private static final int MAX_COLS = 4;
+    private static final int MAX_ROWS = 6;
 
     private WidgetRenderer() {}
 
@@ -39,28 +40,35 @@ final class WidgetRenderer {
         m.updateAppWidget(widgetId, build(c, widgetId, m.getAppWidgetOptions(widgetId)));
     }
 
-    /**
-     * Home screen cells from the widget's real size in dp. Today's phones (Samsung One UI,
-     * Pixel) use cells of about 95dp wide and 110dp tall in portrait. Android's old rule
-     * (70n − 30 dp) counted far too many cells there: a 3x3 widget came out as 4x4 and got
-     * four cramped tiles.
-     */
-    static int cells(int dp, double cellDp, int fallback, int max) {
-        if (dp <= 0) return fallback;
-        return Math.max(1, Math.min(max, (int) Math.round(dp / cellDp)));
-    }
+    // What a tile needs, in dp. Sizing by the space itself (not by home screen cells) packs as
+    // many workflows as really fit: on a Samsung, 3x3 and 4x3 hold 4, 2x2 holds 1, 2x1 holds 1.
+    private static final int FULL_TILE_W = 135;
+    private static final int FULL_TILE_H = 120;
+    private static final int COMPACT_TILE_W = 120;
+    private static final int HEADER_H = 26;
+    private static final int PADDING = 10; // widget padding + tile margins
 
     static RemoteViews build(Context c, int widgetId, Bundle opts) {
         // In portrait (how home screens are mostly used) the widget is minWidth wide and maxHeight tall.
         int wDp = opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH);
         int hDp = opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT);
         if (hDp <= 0 && opts != null) hDp = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT);
-        int cellsW = cells(wDp, 95, 2, MAX_CELLS);
-        int cellsH = cells(hDp, 110, 2, MAX_CELLS);
-        // One workflow per 2x2 block; a narrow or flat widget gets compact tiles.
-        boolean full = cellsW >= 2 && cellsH >= 2;
-        int cols = Math.max(1, cellsW / 2);
-        int rows = Math.max(1, cellsH / 2);
+        if (wDp <= 0) wDp = 300;
+        if (hDp <= 0) hDp = 300;
+
+        boolean header = hDp >= HEADER_H + FULL_TILE_H + PADDING; // room for the header plus one full tile
+        int availW = wDp - PADDING;
+        int availH = hDp - PADDING - (header ? HEADER_H : 0);
+        boolean full = availW >= FULL_TILE_W && availH >= FULL_TILE_H;
+        int cols, rows;
+        if (full) {
+            cols = Math.min(MAX_COLS, Math.max(1, availW / FULL_TILE_W));
+            rows = Math.min(MAX_ROWS, Math.max(1, availH / FULL_TILE_H));
+        } else {
+            // Too small for the details: compact tiles side by side (name, last result, play).
+            cols = Math.min(MAX_COLS, Math.max(1, availW / COMPACT_TILE_W));
+            rows = 1;
+        }
 
         RemoteViews root = new RemoteViews(c.getPackageName(), R.layout.widget_root);
         root.removeAllViews(R.id.widget_grid);
@@ -76,7 +84,6 @@ final class WidgetRenderer {
         root.setViewVisibility(R.id.widget_grid, View.VISIBLE);
 
         // The header (last update, refresh, pick workflows) once the widget is 2 cells tall.
-        boolean header = cellsH >= 2;
         root.setViewVisibility(R.id.widget_header, header ? View.VISIBLE : View.GONE);
         if (header) {
             long at = WidgetStore.refreshedAt(c);

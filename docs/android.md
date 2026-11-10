@@ -18,16 +18,7 @@ Your n8n must be reachable from the phone over **HTTPS** (Android blocks plain `
 
 Long-press your home screen → **Widgets** → **n8n Mobile** → drag **n8n workflows** out. Pick the workflows to show (in the order you tick them) and tap **Add widget**.
 
-Then resize it like any widget. **Each workflow takes a 2x2 space**:
-
-| Size | Shows |
-|---|---|
-| 2x2 | 1 workflow with its details |
-| 4x2 | 2 side by side |
-| 4x4 | 4 |
-| bigger | one more per 2x2 block (up to 8x8) |
-
-Smaller than 2x2 (1x1, 2x1…) it shows one workflow in a compact tile (name, last result and time, play).
+Then resize it like any widget. It fits as many workflows as there is room for, each tile about 135 × 120 dp (on a Samsung phone: 2x2 = 1, 3x3 or 4x3 = 4, 4x5 = 6). Too small for that (2x1, 1x1…) it shows compact tiles side by side (name, last result and time, play).
 
 Each workflow shows:
 
