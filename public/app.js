@@ -26,6 +26,10 @@ const ICONS = {
   trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/>',
   link: '<path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
   save: '<path d="M5 3h11l3 3v15H5zM8 3v5h7V3M8 21v-7h8v7"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  publish: '<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>',
+  pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+  archive: '<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v11h14V9M10 13h4"/>',
 };
 const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[n]}</svg>`;
 
@@ -85,6 +89,7 @@ const S = {
   tab: 'overview',
   workflows: [], executions: [], loading: false, loadedAt: null, error: null,
   wfFilter: 'all', wfQuery: '', exFilter: 'all',
+  sel: null, // Workflows tab multi-select: a Set of workflow ids while selecting, else null
 };
 // n8n ties its session cookie to a per-device id sent in the "browser-id" header.
 const BROWSER_ID = (() => {
@@ -183,6 +188,15 @@ const API = {
       // Older n8n: the switch is a field on the workflow.
       return api(`/workflows/${id}`, { method: 'PATCH', body: { active: on, versionId: wf.versionId } });
     }
+  },
+  // Archive / unarchive (newer n8n; archiving also unpublishes). Delete needs an archived workflow there.
+  archive: (wf) => api(`/workflows/${encodeURIComponent(wf.id)}/archive`, { method: 'POST', body: {} }),
+  unarchive: (wf) => api(`/workflows/${encodeURIComponent(wf.id)}/unarchive`, { method: 'POST', body: {} }),
+  async deleteWorkflow(wf) {
+    if ('isArchived' in wf && !wf.isArchived) {
+      try { await API.archive(wf); } catch (e) { if (e.status !== 404) throw e; } // 404: older n8n deletes directly
+    }
+    return api(`/workflows/${encodeURIComponent(wf.id)}`, { method: 'DELETE' });
   },
   async executions(filter = {}, max = 100) {
     const out = []; let cursor; let lastId;
@@ -305,19 +319,24 @@ function render() {
   document.body.classList.remove('no-nav');
   const titles = { overview: 'Overview', workflows: 'Workflows', executions: 'Executions' };
   const host = baseUrl().replace(/^https?:\/\//, '');
+  if (S.sel && S.tab !== 'workflows') endSelect(false);
+  document.body.classList.toggle('selecting', !!S.sel);
   app.innerHTML = `
-    <header class="topbar">
+    ${S.sel ? selTopbarHtml() : `<header class="topbar">
       <h1>${titles[S.tab]}<span class="sub">${esc(host)}${S.loadedAt ? ' · updated ' + ago(S.loadedAt) : ''}</span></h1>
       <button class="icon-btn ${S.loading ? 'spin' : ''}" id="btn-refresh" aria-label="Refresh">${icon('refresh')}</button>
       <button class="icon-btn" id="btn-settings" aria-label="Settings">${icon('gear')}</button>
-    </header>
+    </header>`}
     <main class="wrap" id="view">${S.error ? `<div class="alert bad" style="margin-top:14px">${esc(S.error)}</div>` : ''}${viewHtml()}</main>
     <nav class="bottomnav">
       ${[['overview', 'Overview', 'home'], ['workflows', 'Workflows', 'flows'], ['executions', 'Executions', 'runs']]
         .map(([k, l, i]) => `<button data-tab="${k}" class="${S.tab === k ? 'on' : ''}">${icon(i)}${l}</button>`).join('')}
-    </nav>`;
-  $('#btn-refresh').onclick = loadAll;
-  $('#btn-settings').onclick = openSettings;
+    </nav>
+    ${S.sel ? selBarHtml() : ''}`;
+  if (S.sel) bindSelect(); else {
+    $('#btn-refresh').onclick = loadAll;
+    $('#btn-settings').onclick = openSettings;
+  }
   app.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; render(); window.scrollTo(0, 0); }));
   bindView();
 }
@@ -377,7 +396,7 @@ function overviewHtml() {
     <div class="spacer"></div>`;
 }
 
-function workflowsHtml() {
+function visibleWorkflows() {
   const q = S.wfQuery.toLowerCase();
   let list = S.workflows.filter((w) => !q || w.name.toLowerCase().includes(q) || String(w.id).toLowerCase().includes(q) || (w.tags || []).some((t) => t.name.toLowerCase().includes(q)));
   const f = S.wfFilter;
@@ -386,11 +405,15 @@ function workflowsHtml() {
   if (f === 'failing') list = list.filter((w) => wfRunStats(w.id).bad > 0);
   if (f === 'archived') list = list.filter((w) => w.isArchived);
   else if (f !== 'all') list = list.filter((w) => !w.isArchived);
+  return list;
+}
+function workflowsHtml() {
+  const list = visibleWorkflows(); const f = S.wfFilter;
   const chips = [['all', 'All'], ['active', 'Active'], ['inactive', 'Inactive'], ['failing', 'Has failures'], ['archived', 'Archived']];
   return `
     <div class="search"><input class="input" id="wf-q" type="search" placeholder="Search name, ID or tag" value="${esc(S.wfQuery)}"></div>
     <div class="chips">${chips.map(([k, l]) => `<button class="chip ${f === k ? 'on' : ''}" data-wff="${k}">${l}</button>`).join('')}</div>
-    <div class="section-title">${list.length} workflow${list.length === 1 ? '' : 's'}</div>
+    <div class="section-title row-title">${list.length} workflow${list.length === 1 ? '' : 's'}${list.length && !S.sel ? '<button class="linkbtn" id="wf-select">Select</button>' : ''}</div>
     <div class="wf-grid">${list.map(wfTile).join('') || '<div class="card empty">No workflows match</div>'}</div>
     <div class="spacer"></div>`;
 }
@@ -398,8 +421,9 @@ function workflowsHtml() {
 function wfTile(w) {
   const st = wfRunStats(w.id); const pub = publishState(w); const trg = triggers(w);
   return `
-  <button class="card wf" data-wf="${esc(w.id)}">
+  <button class="card wf ${S.sel?.has(String(w.id)) ? 'picked' : ''}" data-wf="${esc(w.id)}">
     <div class="wf-head">
+      ${S.sel ? `<span class="wf-check" aria-hidden="true">${S.sel.has(String(w.id)) ? icon('check') : ''}</span>` : ''}
       <div class="wf-icon" style="background:hsl(${hue(w.name)} 55% 50%)">${esc(initials(w.name))}</div>
       <div style="min-width:0;flex:1"><div class="wf-name">${esc(w.name)}</div>
       <div class="wf-meta mono">ID ${esc(w.id)}</div></div>
@@ -435,9 +459,139 @@ function exRow(e) {
     <div class="end">${statusBadge(exStatus(e))}<div style="margin-top:4px">${fmtDur(exDur(e))}</div></div></button>`;
 }
 
+// ---------- multi-select on the Workflows tab ----------
+// "Select" (or press and hold a workflow) picks several workflows; the bar at the bottom acts on all of them.
+function startSelect(id) {
+  if (!S.sel) S.sel = new Set();
+  if (id != null) S.sel.add(String(id));
+  render();
+}
+function endSelect(redraw = true) { S.sel = null; if (redraw) render(); }
+function toggleSel(id) { id = String(id); if (S.sel.has(id)) S.sel.delete(id); else S.sel.add(id); render(); }
+const selectedWorkflows = () => S.workflows.filter((w) => S.sel?.has(String(w.id)));
+const isN8n2 = () => S.workflows.some((w) => 'activeVersionId' in w);
+// Each action: which selected workflows it applies to, the call, and the words for the confirm sheet.
+const BULK = {
+  publish: {
+    get label() { return isN8n2() ? 'Publish' : 'Activate'; }, icon: 'publish',
+    applies: (w) => !w.isArchived && ('activeVersionId' in w ? !w.activeVersionId || (w.versionId && w.activeVersionId !== w.versionId) : !w.active),
+    run: (w) => API.setActive(w, true),
+    get what() { return isN8n2() ? 'Publishes the latest saved version and turns the workflows on, so their triggers start running.' : 'Turns the workflows on, so their triggers start running.'; },
+    get skipped() { return isN8n2() ? 'already published or archived' : 'already active or archived'; },
+    get done() { return isN8n2() ? 'published' : 'activated'; },
+  },
+  deactivate: {
+    label: 'Deactivate', icon: 'pause', danger: true,
+    applies: (w) => w.active && !w.isArchived,
+    run: (w) => API.setActive(w, false),
+    what: 'Turns the workflows off. Their triggers, webhooks and schedules stop until you activate them again.',
+    skipped: 'already inactive', done: 'deactivated',
+  },
+  archive: {
+    label: 'Archive', icon: 'archive', danger: true,
+    applies: (w) => 'isArchived' in w && !w.isArchived,
+    run: (w) => API.archive(w),
+    what: 'Moves the workflows to Archived and turns them off. You can unarchive them later from the Archived filter.',
+    skipped: 'already archived', done: 'archived',
+  },
+  unarchive: {
+    label: 'Unarchive', icon: 'archive',
+    applies: (w) => !!w.isArchived,
+    run: (w) => API.unarchive(w),
+    what: 'Brings the workflows back from Archived. They stay inactive until you activate them.',
+    skipped: 'not archived', done: 'unarchived',
+  },
+  delete: {
+    label: 'Delete', icon: 'trash', danger: true,
+    applies: () => true,
+    run: (w) => API.deleteWorkflow(w),
+    what: 'Deletes the workflows for good, with their settings and edit history. This can’t be undone.',
+    skipped: '', done: 'deleted',
+  },
+};
+function selTopbarHtml() {
+  const vis = visibleWorkflows(); const all = vis.length && vis.every((w) => S.sel.has(String(w.id)));
+  return `<header class="topbar selecting">
+    <button class="icon-btn" id="sel-close" aria-label="Stop selecting">${icon('close')}</button>
+    <h1>${S.sel.size ? `${S.sel.size} selected` : 'Select workflows'}<span class="sub">Tap workflows to pick them</span></h1>
+    <button class="btn" id="sel-all">${all ? 'None' : 'All'}</button>
+  </header>`;
+}
+function selBarHtml() {
+  const sel = selectedWorkflows(); const n = (k) => sel.filter(BULK[k].applies).length;
+  const arch = n('archive') || !n('unarchive') ? 'archive' : 'unarchive';
+  return `<nav class="selbar">${['publish', 'deactivate', arch, 'delete'].map((k) => {
+    const c = n(k); return `<button data-bulk="${k}" class="${BULK[k].danger && k === 'delete' ? 'bad' : ''}" ${c ? '' : 'disabled'}>${icon(BULK[k].icon)}<span>${BULK[k].label}${c ? ` (${c})` : ''}</span></button>`;
+  }).join('')}</nav>`;
+}
+function bindSelect() {
+  $('#sel-close').onclick = () => endSelect();
+  $('#sel-all').onclick = () => {
+    const vis = visibleWorkflows();
+    if (vis.length && vis.every((w) => S.sel.has(String(w.id)))) vis.forEach((w) => S.sel.delete(String(w.id)));
+    else vis.forEach((w) => S.sel.add(String(w.id)));
+    render();
+  };
+  app.querySelectorAll('[data-bulk]').forEach((b) => (b.onclick = () => confirmBulk(b.dataset.bulk)));
+}
+function confirmBulk(key) {
+  const a = BULK[key]; const sel = selectedWorkflows(); const list = sel.filter(a.applies);
+  if (!list.length) return;
+  const skip = sel.length - list.length;
+  const names = list.slice(0, 8).map((w) => `<li>${esc(w.name)}</li>`).join('') + (list.length > 8 ? `<li class="help">and ${list.length - 8} more</li>` : '');
+  openSheet('bulk', sheetHead(`${a.label} ${list.length} workflow${list.length === 1 ? '' : 's'}?`) + `<div class="sheet-body">
+    <p>${a.what}</p>
+    <ul class="bulk-names">${names}</ul>
+    ${skip ? `<p class="help">${skip} other selected workflow${skip === 1 ? ' is' : 's are'} ${a.skipped} and will be left as ${skip === 1 ? 'it is' : 'they are'}.</p>` : ''}
+    <div class="btn-row" style="margin:16px 0 20px"><button class="btn" data-close>Cancel</button>
+    <button class="btn ${a.danger ? 'danger' : 'primary'}" id="bulk-go">${a.label} ${list.length}</button></div></div>`, (sh) => {
+    sh.querySelector('#bulk-go').onclick = () => { afterPop = () => runBulk(key, list); history.back(); };
+  });
+}
+async function runBulk(key, list) {
+  const a = BULK[key]; const failed = []; let ok = 0;
+  for (const [i, w] of list.entries()) {
+    toast(`${a.label}: ${i + 1} of ${list.length}…`, false, 60000);
+    try {
+      const res = await a.run(w);
+      const at = S.workflows.findIndex((x) => String(x.id) === String(w.id));
+      if (key === 'delete') { if (at >= 0) S.workflows.splice(at, 1); }
+      else if (at >= 0) {
+        const upd = res && typeof res === 'object' ? res : {};
+        S.workflows[at] = { ...S.workflows[at], ...upd };
+        if (key === 'archive') { Object.assign(S.workflows[at], { isArchived: true, active: false }); if ('activeVersionId' in w) S.workflows[at].activeVersionId = null; }
+        if (key === 'unarchive') S.workflows[at].isArchived = false;
+      }
+      ok++;
+    } catch (e) {
+      if (e.status === 401) { toast(e.message, true); return; }
+      failed.push([w, e.status === 404 && key !== 'delete' ? 'Your n8n version doesn’t support this.' : e.message]);
+    }
+  }
+  endSelect();
+  if (!failed.length) { toast(`${ok} workflow${ok === 1 ? '' : 's'} ${a.done}`); return; }
+  toast(`${ok} ${a.done}, ${failed.length} failed`, true);
+  openSheet('bulk-result', sheetHead(`${failed.length} couldn’t be ${a.done}`) + `<div class="sheet-body">
+    ${ok ? `<p>${ok} other workflow${ok === 1 ? ' was' : 's were'} ${a.done}.</p>` : ''}
+    <div class="list">${failed.map(([w, msg]) => `<button class="row" data-wf="${esc(w.id)}"><div class="main"><div class="title">${esc(w.name)}</div>
+      <div class="meta wrap-meta">${esc(msg)}</div></div></button>`).join('')}</div><div class="spacer"></div></div>`, (sh) => {
+    sh.querySelectorAll('[data-wf]').forEach((b) => (b.onclick = () => openWorkflow(b.dataset.wf)));
+  });
+}
+
 function bindView() {
   const v = $('#view'); if (!v) return;
-  v.querySelectorAll('[data-wf]').forEach((b) => (b.onclick = () => openWorkflow(b.dataset.wf)));
+  v.querySelectorAll('[data-wf]').forEach((b) => {
+    if (!b.classList.contains('wf')) { b.onclick = () => openWorkflow(b.dataset.wf); return; }
+    // Workflow tiles: tap opens (or ticks while selecting); press and hold starts selecting.
+    let timer = null; let held = false;
+    const cancel = () => { clearTimeout(timer); timer = null; };
+    b.onpointerdown = () => { held = false; cancel(); timer = setTimeout(() => { held = true; navigator.vibrate?.(20); startSelect(b.dataset.wf); }, 500); };
+    b.onpointerup = b.onpointerleave = b.onpointercancel = cancel;
+    b.oncontextmenu = (ev) => ev.preventDefault();
+    b.onclick = () => { if (held) { held = false; return; } if (S.sel) toggleSel(b.dataset.wf); else openWorkflow(b.dataset.wf); };
+  });
+  const sb = $('#wf-select'); if (sb) sb.onclick = () => startSelect();
   v.querySelectorAll('[data-ex]').forEach((b) => (b.onclick = () => openExecution(b.dataset.ex)));
   v.querySelectorAll('[data-wff]').forEach((b) => (b.onclick = () => { S.wfFilter = b.dataset.wff; render(); }));
   v.querySelectorAll('[data-exf]').forEach((b) => (b.onclick = () => { S.exFilter = b.dataset.exf; render(); }));
@@ -628,6 +782,7 @@ let lastBackAt = 0;
 window.n8nBack = () => {
   if (backClosers.length) { backClosers.pop()(); return 'handled'; }
   if (sheetStack.length) { history.back(); return 'handled'; }
+  if (S.sel) { endSelect(); return 'handled'; } // back leaves multi-select on the Workflows tab
   if (S.conn && S.tab !== 'overview') { S.tab = 'overview'; render(); window.scrollTo(0, 0); lastBackAt = 0; return 'handled'; }
   if (Date.now() - lastBackAt < 2000) return 'exit';
   lastBackAt = Date.now(); toast('Swipe back again to exit', false, 2000);

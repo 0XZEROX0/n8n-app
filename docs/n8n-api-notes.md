@@ -12,6 +12,8 @@ The app signs in like the n8n editor does and uses n8n's own REST API (`/rest`),
 | Workflows | `GET /rest/workflows?select=[...]&skip&take` |
 | Workflow details | `GET /rest/workflows/{id}` |
 | Activate / deactivate | `POST /rest/workflows/{id}/activate` `{ versionId }`, `/deactivate` (older n8n: `PATCH` with `active`) |
+| Archive / unarchive (newer n8n) | `POST /rest/workflows/{id}/archive` `{ expectedChecksum? }` (also unpublishes), `POST /rest/workflows/{id}/unarchive` |
+| Delete | `DELETE /rest/workflows/{id}`; newer n8n only deletes archived workflows ("Workflow must be archived before it can be deleted"), so the app archives first |
 | Run now | `POST /rest/workflows/{id}/run` `{ workflowData, triggerToStartFrom: { name } }` |
 | Node icons (Flow tab) | `POST /rest/node-types` `{ nodeInfos: [{ name, version }] }`, then each type's `iconUrl` (e.g. `icons/n8n-nodes-base/dist/nodes/Slack/slack.svg`) |
 | Save edits | `PATCH /rest/workflows/{id}` `{ name, description, nodes, connections, settings, nodeGroups, versionId, expectedChecksum }` (n8n 2.x uses `expectedChecksum` = the `checksum` from GET to catch someone else's save; Community edition skips that check) |

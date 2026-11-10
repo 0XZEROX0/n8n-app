@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Select several workflows at once.** On the Workflows tab, tap **Select** (or press and hold a workflow), tick the ones you want, or **All** for everything the current filter and search show. The bar at the bottom then **Publishes** (Activates on older n8n), **Deactivates**, **Archives** / **Unarchives** or **Deletes** them all, each button showing how many it applies to. Every action asks first and lists the workflows; delete says it can't be undone. Any that fail are listed with n8n's reason. Back (swipe or button) or ✕ stops selecting.
 - Widget: sizes are now worked out right on current phones. A 3x3 widget was treated as 4x4 and squeezed in four tiles, which cut off their play buttons; it now shows one workflow per 2x2 space as intended (3x3 = 1, 4x4 = 4).
 - Widget: the play button can no longer be cut off. It now sits next to the workflow name, and the details below are shorter so the last-10-runs dots fit too.
 - Widget: each workflow now takes a 2x2 space (2x2 = 1, 4x2 = 2, 4x4 = 4) and shows more: the result of the last run, when it ran and how long it took, what starts it and whether it is active, and the last 10 runs as coloured dots with an OK/failed count.
