@@ -154,14 +154,14 @@ final class N8nClient {
         }
     }
 
-    /** The newest execution of a workflow, or null when it never ran. */
-    JSONObject latestExecution(String workflowId) throws IOException {
+    /** The newest executions of a workflow, newest first (empty when it never ran). */
+    JSONArray recentExecutions(String workflowId, int limit) throws IOException {
         JSONObject filter = new JSONObject();
         try { filter.put("workflowId", workflowId); } catch (JSONException ignored) {}
-        Object data = api("GET", "/executions?filter=" + enc(filter.toString()) + "&limit=1", null);
+        Object data = api("GET", "/executions?filter=" + enc(filter.toString()) + "&limit=" + limit, null);
         JSONArray rows = data instanceof JSONObject ? ((JSONObject) data).optJSONArray("results")
             : data instanceof JSONArray ? (JSONArray) data : null;
-        return rows != null && rows.length() > 0 ? rows.optJSONObject(0) : null;
+        return rows != null ? rows : new JSONArray();
     }
 
     /** success, error, running, waiting, canceled… the same wording the app uses. */
@@ -198,6 +198,31 @@ final class N8nClient {
             if (n != null && "n8n-nodes-base.webhook".equals(n.optString("type")) && !n.optBoolean("disabled")) return n;
         }
         return null;
+    }
+
+    /** What starts the workflow, in a word: Schedule, Webhook, Manual, Form… */
+    static String triggerLabel(JSONObject wf) {
+        JSONArray nodes = wf.optJSONArray("nodes");
+        if (nodes == null) return "";
+        for (int i = 0; i < nodes.length(); i++) {
+            JSONObject n = nodes.optJSONObject(i);
+            if (n == null || !isTrigger(n) || n.optBoolean("disabled")) continue;
+            String t = n.optString("type");
+            switch (t) {
+                case "n8n-nodes-base.webhook": return "Webhook";
+                case "n8n-nodes-base.formTrigger": return "Form";
+                case "n8n-nodes-base.manualTrigger": return "Manual";
+                case "n8n-nodes-base.scheduleTrigger": case "n8n-nodes-base.cron": return "Schedule";
+                case "n8n-nodes-base.executeWorkflowTrigger": return "Sub-workflow";
+                case "n8n-nodes-base.errorTrigger": return "Error";
+                case "@n8n/n8n-nodes-langchain.chatTrigger": return "Chat";
+                default:
+                    String tail = t.substring(t.lastIndexOf('.') + 1).replaceAll("(?i)trigger$", "");
+                    if (tail.isEmpty()) return "Trigger";
+                    return Character.toUpperCase(tail.charAt(0)) + tail.substring(1) + " trigger";
+            }
+        }
+        return "";
     }
 
     /** Whether the widget's play button can start this workflow. */

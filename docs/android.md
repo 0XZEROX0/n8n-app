@@ -18,16 +18,26 @@ Your n8n must be reachable from the phone over **HTTPS** (Android blocks plain `
 
 Long-press your home screen → **Widgets** → **n8n Mobile** → drag **n8n workflows** out. Pick the workflows to show (in the order you tick them) and tap **Add widget**.
 
-Then resize it like any widget. **One cell holds one workflow**:
+Then resize it like any widget. **Each workflow takes a 2x2 space**:
 
 | Size | Shows |
 |---|---|
-| 1x1 | 1 workflow |
-| 2x1 | 2 workflows side by side |
-| 2x2 | 4 workflows, plus a small header with refresh and ⚙ |
-| 4x2, 3x3, … | 8, 9, … (up to 6x6) |
+| 2x2 | 1 workflow with its details |
+| 4x2 | 2 side by side |
+| 4x4 | 4 |
+| bigger | one more per 2x2 block (up to 8x8) |
 
-Each workflow shows its name, how its last run went (green OK, red Failed, blue Running, with the time) and a play button:
+Smaller than 2x2 (1x1, 2x1…) it shows one workflow in a compact tile (name, last result and time, play).
+
+Each workflow shows:
+
+- its name, and the result of the last run: **Succeeded**, **Failed**, **Running now**, *Never ran*…
+- **Last run: Today 14:02 · took 3 s** (when it last ran and how long it took)
+- what starts it and whether it's on, e.g. **Schedule · Active**
+- the **last 10 runs** as coloured dots (newest on the right) and a count, e.g. *Last 10: 9 OK · 1 failed*
+- a **play** button
+
+What you can tap:
 
 - **Play** starts it, the same as **Run now** in the app (Manual / Schedule triggers), or calls its production webhook if it only has a Webhook trigger and is active. The tile shows *Starting…* and then follows the run until it finishes.
 - Workflows that can only start from their own trigger (form, chat, an app event) show an **open** button instead, which opens them in the app.

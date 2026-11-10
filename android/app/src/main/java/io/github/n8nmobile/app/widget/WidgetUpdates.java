@@ -11,6 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -21,6 +22,8 @@ public final class WidgetUpdates {
     private static final long POLL_MS = 10_000;
     /** …but stop following a run after this long; the 30-minute refresh picks it up. */
     private static final long FOLLOW_RUN_MS = 5 * 60_000;
+    /** Runs shown as dots on a big tile. */
+    static final int HISTORY = 10;
 
     private WidgetUpdates() {}
 
@@ -79,12 +82,29 @@ public final class WidgetUpdates {
                 if (wf != null) {
                     info.put("active", wf.optBoolean("active"));
                     info.put("runnable", N8nClient.canRun(wf));
-                    JSONObject ex = api.latestExecution(id);
+                    info.put("trigger", N8nClient.triggerLabel(wf));
+                    JSONArray runs = api.recentExecutions(id, HISTORY);
+                    // Newest first: s = succeeded, e = failed, r = running/waiting, c = canceled.
+                    StringBuilder hist = new StringBuilder();
+                    int ok = 0, bad = 0;
+                    for (int i = 0; i < runs.length(); i++) {
+                        String st = N8nClient.executionStatus(runs.optJSONObject(i));
+                        char k = "success".equals(st) ? 's' : "error".equals(st) ? 'e' : "canceled".equals(st) ? 'c' : 'r';
+                        if (k == 's') ok++;
+                        if (k == 'e') bad++;
+                        hist.append(k);
+                    }
+                    info.put("history", hist.toString());
+                    info.put("ok", ok);
+                    info.put("failed", bad);
+                    JSONObject ex = runs.length() > 0 ? runs.optJSONObject(0) : null;
                     if (ex != null) {
                         String st = N8nClient.executionStatus(ex);
                         long started = WidgetRenderer.parseTime(ex.optString("startedAt", ex.optString("createdAt", "")));
+                        long stopped = WidgetRenderer.parseTime(ex.isNull("stoppedAt") ? "" : ex.optString("stoppedAt", ""));
                         info.put("status", st);
                         info.put("startedAt", started);
+                        if (stopped >= started && started > 0) info.put("durationMs", stopped - started);
                         long pending = WidgetStore.pendingSince(c, id);
                         if (pending > 0 && started >= pending - 5_000) WidgetStore.clearPending(c, id); // n8n has it now
                         boolean live = "running".equals(st) || "new".equals(st) || "waiting".equals(st);
