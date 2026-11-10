@@ -4,25 +4,24 @@
     android:layout_width="match_parent" android:layout_height="match_parent"
     android:background="@drawable/widget_bg" android:orientation="vertical" android:padding="5dp">
     <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:layout_margin="3dp"
-        android:background="@drawable/widget_tile_bg" android:orientation="vertical" android:padding="10dp">
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Daily report"
-            android:textColor="@color/widget_text" android:textSize="14sp" android:textStyle="bold" />
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp"
-            android:gravity="center_vertical" android:orientation="horizontal">
-            <ImageView android:layout_width="10dp" android:layout_height="10dp" android:src="@drawable/widget_dot_ok" />
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingStart="6dp" android:text="Succeeded"
+        android:background="@drawable/widget_tile_bg" android:orientation="vertical" android:padding="9dp">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Daily report"
                 android:textColor="@color/widget_text" android:textSize="13sp" android:textStyle="bold" />
+            <ImageView android:layout_width="34dp" android:layout_height="34dp" android:background="@drawable/widget_play_bg"
+                android:padding="8dp" android:src="@drawable/widget_ic_play" />
         </LinearLayout>
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="3dp"
-            android:text="Last run: Today 09:00 · took 4 s" android:textColor="@color/widget_text_dim" android:textSize="11sp" />
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp"
-            android:text="Schedule · Active" android:textColor="@color/widget_text_dim" android:textSize="11sp" />
-        <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="bottom" android:orientation="horizontal">
-            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                android:text="Last 10: 9 OK · 1 failed" android:textColor="@color/widget_text_dim" android:textSize="10sp" />
-            <ImageView android:layout_width="38dp" android:layout_height="38dp" android:background="@drawable/widget_play_bg"
-                android:padding="9dp" android:src="@drawable/widget_ic_play" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="3dp"
+            android:gravity="center_vertical" android:orientation="horizontal">
+            <ImageView android:layout_width="9dp" android:layout_height="9dp" android:src="@drawable/widget_dot_ok" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingStart="5dp" android:text="Succeeded"
+                android:textColor="@color/widget_text" android:textSize="12sp" android:textStyle="bold" />
         </LinearLayout>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Today 09:00 · 4 s"
+            android:textColor="@color/widget_text_dim" android:textSize="11sp" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Schedule · Active"
+            android:textColor="@color/widget_text_dim" android:textSize="11sp" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp"
+            android:text="9/10 OK" android:textColor="@color/widget_text_dim" android:textSize="10sp" />
     </LinearLayout>
 </LinearLayout>

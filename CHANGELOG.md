@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Widget: sizes are now worked out right on current phones. A 3x3 widget was treated as 4x4 and squeezed in four tiles, which cut off their play buttons; it now shows one workflow per 2x2 space as intended (3x3 = 1, 4x4 = 4).
+- Widget: the play button can no longer be cut off. It now sits next to the workflow name, and the details below are shorter so the last-10-runs dots fit too.
 - Widget: each workflow now takes a 2x2 space (2x2 = 1, 4x2 = 2, 4x4 = 4) and shows more: the result of the last run, when it ran and how long it took, what starts it and whether it is active, and the last 10 runs as coloured dots with an OK/failed count.
 - Fix: the app crashed after picking workflows for the home screen widget (Android 14 and newer). The widget's background refresh needs a permission to wait for network; it now has it.
 - **Home screen widget** (Android app): one resizable widget. Each home screen cell holds one workflow, so 1x1 shows one, 2x1 two, 2x2 four, and bigger sizes more. Each shows the last run (OK / Failed / Running, with the time) and a play button that starts it. Tap a workflow to open it in the app; pick and order the workflows when you add it, or later with the ⚙ button (or "Reconfigure" on Android 12+). Refreshes every 30 minutes, when you leave the app, after a run, and with the ↻ button.

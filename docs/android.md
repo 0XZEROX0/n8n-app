@@ -32,10 +32,10 @@ Smaller than 2x2 (1x1, 2x1…) it shows one workflow in a compact tile (name, la
 Each workflow shows:
 
 - its name, and the result of the last run: **Succeeded**, **Failed**, **Running now**, *Never ran*…
-- **Last run: Today 14:02 · took 3 s** (when it last ran and how long it took)
+- when it last ran and how long it took, e.g. **Today 14:02 · 3 s**
 - what starts it and whether it's on, e.g. **Schedule · Active**
-- the **last 10 runs** as coloured dots (newest on the right) and a count, e.g. *Last 10: 9 OK · 1 failed*
-- a **play** button
+- the **last 10 runs** as coloured dots (newest on the right) and a count, e.g. *9/10 OK*
+- a **play** button, top right next to the name
 
 What you can tap:
 

@@ -39,15 +39,24 @@ final class WidgetRenderer {
         m.updateAppWidget(widgetId, build(c, widgetId, m.getAppWidgetOptions(widgetId)));
     }
 
-    /** Home screen cells from a size in dp (Android's own sizing rule: n cells ≈ 70n − 30 dp). */
-    static int cells(int dp, int fallback, int max) {
+    /**
+     * Home screen cells from the widget's real size in dp. Today's phones (Samsung One UI,
+     * Pixel) use cells of about 95dp wide and 110dp tall in portrait. Android's old rule
+     * (70n − 30 dp) counted far too many cells there: a 3x3 widget came out as 4x4 and got
+     * four cramped tiles.
+     */
+    static int cells(int dp, double cellDp, int fallback, int max) {
         if (dp <= 0) return fallback;
-        return Math.max(1, Math.min(max, (dp + 30) / 70));
+        return Math.max(1, Math.min(max, (int) Math.round(dp / cellDp)));
     }
 
     static RemoteViews build(Context c, int widgetId, Bundle opts) {
-        int cellsW = cells(opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH), 2, MAX_CELLS);
-        int cellsH = cells(opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT), 2, MAX_CELLS);
+        // In portrait (how home screens are mostly used) the widget is minWidth wide and maxHeight tall.
+        int wDp = opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH);
+        int hDp = opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT);
+        if (hDp <= 0 && opts != null) hDp = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT);
+        int cellsW = cells(wDp, 95, 2, MAX_CELLS);
+        int cellsH = cells(hDp, 110, 2, MAX_CELLS);
         // One workflow per 2x2 block; a narrow or flat widget gets compact tiles.
         boolean full = cellsW >= 2 && cellsH >= 2;
         int cols = Math.max(1, cellsW / 2);
@@ -134,12 +143,12 @@ final class WidgetRenderer {
         t.setTextViewText(R.id.tile_status, status);
         t.setImageViewResource(R.id.tile_dot, dot);
 
-        // "Last run: Today 14:02 · took 3 s"
+        // "Today 14:02 · 3 s": one short line, so it fits next to everything else on a 2x2 tile.
         String when = "";
         if (at > 0) {
-            when = "Last run: " + formatWhen(c, at);
+            when = formatWhen(c, at);
             long dur = info.optLong("durationMs", -1);
-            if (dur >= 0 && !st.equals("running")) when += " · took " + formatDuration(dur);
+            if (dur >= 0 && !st.equals("running")) when += " · " + formatDuration(dur);
         }
         t.setTextViewText(R.id.tile_when, when);
         t.setViewVisibility(R.id.tile_when, when.isEmpty() ? View.GONE : View.VISIBLE);
@@ -153,7 +162,7 @@ final class WidgetRenderer {
         t.setTextViewText(R.id.tile_meta, meta);
         t.setViewVisibility(R.id.tile_meta, meta.isEmpty() ? View.GONE : View.VISIBLE);
 
-        // Last runs as dots, oldest left, newest right, plus "Last 10: 9 OK · 1 failed".
+        // Last runs as dots, oldest left, newest right, plus "9/10 OK".
         String hist = info != null ? info.optString("history", "") : "";
         for (int i = 0; i < HISTORY_DOTS.length; i++) {
             int j = HISTORY_DOTS.length - 1 - i; // history is newest first; the newest dot is on the right
@@ -165,8 +174,8 @@ final class WidgetRenderer {
         }
         String rate = "";
         if (!hist.isEmpty()) {
-            int ok = info.optInt("ok"), bad = info.optInt("failed");
-            rate = "Last " + hist.length() + ": " + ok + " OK" + (bad > 0 ? " · " + bad + " failed" : "");
+            int ok = info.optInt("ok");
+            rate = ok + "/" + hist.length() + " OK";
         }
         t.setTextViewText(R.id.tile_rate, rate);
         t.setViewVisibility(R.id.tile_rate, rate.isEmpty() ? View.GONE : View.VISIBLE);
@@ -202,6 +211,7 @@ final class WidgetRenderer {
     }
 
     static String formatDuration(long ms) {
+        if (ms < 100) return "< 0.1 s";
         if (ms < 1000) return String.format(Locale.US, "%.1f s", ms / 1000.0);
         long s = ms / 1000;
         if (s < 60) return s + " s";

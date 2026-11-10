@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One workflow on a 2x2 block: name, result of the last run, when and how long,
-     what starts it, and the last 10 runs as dots, with a play button. -->
+<!-- One workflow on a 2x2 block. The play button sits next to the name at the top, so it is
+     never cut off; the lines below it are short so they fit even on small home screen grids:
+     name + play / result / when + how long / trigger + state / last 10 runs as dots. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/tile"
     android:layout_width="0dp"
@@ -9,29 +10,46 @@
     android:layout_weight="1"
     android:background="@drawable/widget_tile_bg"
     android:orientation="vertical"
-    android:padding="10dp">
-
-    <TextView
-        android:id="@+id/tile_name"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:ellipsize="end"
-        android:maxLines="2"
-        android:textColor="@color/widget_text"
-        android:textSize="14sp"
-        android:textStyle="bold" />
+    android:padding="9dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/tile_name"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:textColor="@color/widget_text"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <ImageView
+            android:id="@+id/tile_play"
+            android:layout_width="34dp"
+            android:layout_height="34dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/widget_play_bg"
+            android:contentDescription="Run workflow"
+            android:padding="8dp"
+            android:src="@drawable/widget_ic_play" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="3dp"
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
         <ImageView
             android:id="@+id/tile_dot"
-            android:layout_width="10dp"
-            android:layout_height="10dp"
+            android:layout_width="9dp"
+            android:layout_height="9dp"
             android:importantForAccessibility="no"
             android:src="@drawable/widget_dot_idle" />
 
@@ -40,10 +58,10 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:ellipsize="end"
-            android:paddingStart="6dp"
+            android:paddingStart="5dp"
             android:singleLine="true"
             android:textColor="@color/widget_text"
-            android:textSize="13sp"
+            android:textSize="12sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -51,9 +69,9 @@
         android:id="@+id/tile_when"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="3dp"
+        android:layout_marginTop="1dp"
         android:ellipsize="end"
-        android:maxLines="2"
+        android:singleLine="true"
         android:textColor="@color/widget_text_dim"
         android:textSize="11sp" />
 
@@ -61,134 +79,107 @@
         android:id="@+id/tile_meta"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
         android:ellipsize="end"
         android:singleLine="true"
         android:textColor="@color/widget_text_dim"
         android:textSize="11sp" />
 
-    <FrameLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1" />
-
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="bottom"
+        android:layout_marginTop="4dp"
+        android:gravity="center_vertical"
         android:orientation="horizontal">
+        <ImageView
+            android:id="@+id/tile_h0"
+            android:layout_width="7dp"
+            android:layout_height="7dp"
+            android:layout_marginEnd="3dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/widget_dot_idle"
+            android:visibility="gone" />
+        <ImageView
+            android:id="@+id/tile_h1"
+            android:layout_width="7dp"
+            android:layout_height="7dp"
+            android:layout_marginEnd="3dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/widget_dot_idle"
+            android:visibility="gone" />
+        <ImageView
+            android:id="@+id/tile_h2"
+            android:layout_width="7dp"
+            android:layout_height="7dp"
+            android:layout_marginEnd="3dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/widget_dot_idle"
+            android:visibility="gone" />
+        <ImageView
+            android:id="@+id/tile_h3"
+            android:layout_width="7dp"
+            android:layout_height="7dp"
+            android:layout_marginEnd="3dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/widget_dot_idle"
+            android:visibility="gone" />
+        <ImageView
+            android:id="@+id/tile_h4"
+            android:layout_width="7dp"
+            android:layout_height="7dp"
+            android:layout_marginEnd="3dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/widget_dot_idle"
+            android:visibility="gone" />
+        <ImageView
+            android:id="@+id/tile_h5"
+            android:layout_width="7dp"
+            android:layout_height="7dp"
+            android:layout_marginEnd="3dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/widget_dot_idle"
+            android:visibility="gone" />
+        <ImageView
+            android:id="@+id/tile_h6"
+            android:layout_width="7dp"
+            android:layout_height="7dp"
+            android:layout_marginEnd="3dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/widget_dot_idle"
+            android:visibility="gone" />
+        <ImageView
+            android:id="@+id/tile_h7"
+            android:layout_width="7dp"
+            android:layout_height="7dp"
+            android:layout_marginEnd="3dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/widget_dot_idle"
+            android:visibility="gone" />
+        <ImageView
+            android:id="@+id/tile_h8"
+            android:layout_width="7dp"
+            android:layout_height="7dp"
+            android:layout_marginEnd="3dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/widget_dot_idle"
+            android:visibility="gone" />
+        <ImageView
+            android:id="@+id/tile_h9"
+            android:layout_width="7dp"
+            android:layout_height="7dp"
+            android:layout_marginEnd="3dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/widget_dot_idle"
+            android:visibility="gone" />
 
-        <LinearLayout
+        <TextView
+            android:id="@+id/tile_rate"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:orientation="vertical">
-
-            <TextView
-                android:id="@+id/tile_rate"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:ellipsize="end"
-                android:singleLine="true"
-                android:textColor="@color/widget_text_dim"
-                android:textSize="10sp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-            <ImageView
-                android:id="@+id/tile_h0"
-                android:layout_width="7dp"
-                android:layout_height="7dp"
-                android:layout_marginEnd="3dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/widget_dot_idle"
-                android:visibility="gone" />
-            <ImageView
-                android:id="@+id/tile_h1"
-                android:layout_width="7dp"
-                android:layout_height="7dp"
-                android:layout_marginEnd="3dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/widget_dot_idle"
-                android:visibility="gone" />
-            <ImageView
-                android:id="@+id/tile_h2"
-                android:layout_width="7dp"
-                android:layout_height="7dp"
-                android:layout_marginEnd="3dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/widget_dot_idle"
-                android:visibility="gone" />
-            <ImageView
-                android:id="@+id/tile_h3"
-                android:layout_width="7dp"
-                android:layout_height="7dp"
-                android:layout_marginEnd="3dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/widget_dot_idle"
-                android:visibility="gone" />
-            <ImageView
-                android:id="@+id/tile_h4"
-                android:layout_width="7dp"
-                android:layout_height="7dp"
-                android:layout_marginEnd="3dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/widget_dot_idle"
-                android:visibility="gone" />
-            <ImageView
-                android:id="@+id/tile_h5"
-                android:layout_width="7dp"
-                android:layout_height="7dp"
-                android:layout_marginEnd="3dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/widget_dot_idle"
-                android:visibility="gone" />
-            <ImageView
-                android:id="@+id/tile_h6"
-                android:layout_width="7dp"
-                android:layout_height="7dp"
-                android:layout_marginEnd="3dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/widget_dot_idle"
-                android:visibility="gone" />
-            <ImageView
-                android:id="@+id/tile_h7"
-                android:layout_width="7dp"
-                android:layout_height="7dp"
-                android:layout_marginEnd="3dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/widget_dot_idle"
-                android:visibility="gone" />
-            <ImageView
-                android:id="@+id/tile_h8"
-                android:layout_width="7dp"
-                android:layout_height="7dp"
-                android:layout_marginEnd="3dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/widget_dot_idle"
-                android:visibility="gone" />
-            <ImageView
-                android:id="@+id/tile_h9"
-                android:layout_width="7dp"
-                android:layout_height="7dp"
-                android:layout_marginEnd="3dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/widget_dot_idle"
-                android:visibility="gone" />
-            </LinearLayout>
-        </LinearLayout>
-
-        <ImageView
-            android:id="@+id/tile_play"
-            android:layout_width="38dp"
-            android:layout_height="38dp"
-            android:background="@drawable/widget_play_bg"
-            android:contentDescription="Run workflow"
-            android:padding="9dp"
-            android:src="@drawable/widget_ic_play" />
+            android:ellipsize="end"
+            android:paddingStart="2dp"
+            android:singleLine="true"
+            android:textColor="@color/widget_text_dim"
+            android:textSize="10sp" />
     </LinearLayout>
 </LinearLayout>
