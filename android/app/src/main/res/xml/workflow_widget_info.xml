@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Starts at 2x2 (4 workflows); resize down to 1x1 (one workflow) or up for more. -->
+<!-- Starts at 2x2 (one workflow with its details); each extra 2x2 block shows one more. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:configure="io.github.n8nmobile.app.widget.WidgetConfigActivity"
     android:description="@string/widget_description"

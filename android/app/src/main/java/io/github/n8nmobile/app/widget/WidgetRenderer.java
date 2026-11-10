@@ -21,12 +21,12 @@ import java.util.TimeZone;
 import org.json.JSONObject;
 
 /**
- * Draws the widget. One home screen cell holds one workflow, so the same widget shows
- * 1 workflow at 1x1, 2 at 2x1, 4 at 2x2, 8 at 4x2 and so on as you resize it.
+ * Draws the widget. Each workflow gets a 2x2 block of home screen cells, so the same widget
+ * shows 1 workflow at 2x2, 2 at 4x2, 4 at 4x4 and so on as you resize it. Smaller than
+ * 2x2 it still shows one workflow, in a compact tile.
  */
 final class WidgetRenderer {
-    private static final int MAX_COLS = 6;
-    private static final int MAX_ROWS = 6;
+    private static final int MAX_CELLS = 8;
 
     private WidgetRenderer() {}
 
@@ -46,8 +46,12 @@ final class WidgetRenderer {
     }
 
     static RemoteViews build(Context c, int widgetId, Bundle opts) {
-        int cols = cells(opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH), 2, MAX_COLS);
-        int rows = cells(opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT), 2, MAX_ROWS);
+        int cellsW = cells(opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH), 2, MAX_CELLS);
+        int cellsH = cells(opts == null ? 0 : opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT), 2, MAX_CELLS);
+        // One workflow per 2x2 block; a narrow or flat widget gets compact tiles.
+        boolean full = cellsW >= 2 && cellsH >= 2;
+        int cols = Math.max(1, cellsW / 2);
+        int rows = Math.max(1, cellsH / 2);
 
         RemoteViews root = new RemoteViews(c.getPackageName(), R.layout.widget_root);
         root.removeAllViews(R.id.widget_grid);
@@ -62,8 +66,8 @@ final class WidgetRenderer {
         root.setViewVisibility(R.id.widget_message, View.GONE);
         root.setViewVisibility(R.id.widget_grid, View.VISIBLE);
 
-        // The header (last update, refresh, pick workflows) only when there are two rows or more.
-        boolean header = rows >= 2;
+        // The header (last update, refresh, pick workflows) once the widget is 2 cells tall.
+        boolean header = cellsH >= 2;
         root.setViewVisibility(R.id.widget_header, header ? View.VISIBLE : View.GONE);
         if (header) {
             long at = WidgetStore.refreshedAt(c);
@@ -80,7 +84,7 @@ final class WidgetRenderer {
             for (int col = 0; col < cols; col++) {
                 int i = r * cols + col;
                 RemoteViews cell;
-                if (i < sel.size()) cell = tile(c, widgetId, sel.get(i));
+                if (i < sel.size()) cell = full ? fullTile(c, widgetId, sel.get(i)) : tile(c, widgetId, sel.get(i));
                 else if (i == sel.size()) {
                     cell = new RemoteViews(c.getPackageName(), R.layout.widget_tile_add);
                     cell.setOnClickPendingIntent(R.id.tile_add, openConfig(c, widgetId));
@@ -101,6 +105,112 @@ final class WidgetRenderer {
         return root;
     }
 
+    private static final int[] HISTORY_DOTS = {
+        R.id.tile_h0, R.id.tile_h1, R.id.tile_h2, R.id.tile_h3, R.id.tile_h4,
+        R.id.tile_h5, R.id.tile_h6, R.id.tile_h7, R.id.tile_h8, R.id.tile_h9,
+    };
+
+    /** A 2x2 (or bigger) tile: name, result, when, how long, trigger, and the last 10 runs. */
+    private static RemoteViews fullTile(Context c, int widgetId, String wfId) {
+        RemoteViews t = new RemoteViews(c.getPackageName(), R.layout.widget_tile_full);
+        JSONObject info = WidgetStore.workflow(c, wfId);
+        long pending = WidgetStore.pendingSince(c, wfId);
+        t.setTextViewText(R.id.tile_name, info != null ? info.optString("name", "Workflow") : "Loading…");
+
+        String st = info != null ? info.optString("status", "") : "";
+        long at = info != null ? info.optLong("startedAt", 0) : 0;
+        String status;
+        int dot;
+        if (pending > 0) { status = "Starting…"; dot = R.drawable.widget_dot_info; }
+        else if (info == null) { status = "Loading…"; dot = R.drawable.widget_dot_idle; }
+        else if (!info.optBoolean("found", true)) { status = "Not found on n8n"; dot = R.drawable.widget_dot_bad; }
+        else if (st.equals("success")) { status = "Succeeded"; dot = R.drawable.widget_dot_ok; }
+        else if (st.equals("error")) { status = "Failed"; dot = R.drawable.widget_dot_bad; }
+        else if (st.equals("running") || st.equals("new")) { status = "Running now"; dot = R.drawable.widget_dot_info; }
+        else if (st.equals("waiting")) { status = "Waiting"; dot = R.drawable.widget_dot_info; }
+        else if (st.equals("canceled")) { status = "Canceled"; dot = R.drawable.widget_dot_warn; }
+        else if (st.isEmpty()) { status = "Never ran"; dot = R.drawable.widget_dot_idle; }
+        else { status = st; dot = R.drawable.widget_dot_idle; }
+        t.setTextViewText(R.id.tile_status, status);
+        t.setImageViewResource(R.id.tile_dot, dot);
+
+        // "Last run: Today 14:02 · took 3 s"
+        String when = "";
+        if (at > 0) {
+            when = "Last run: " + formatWhen(c, at);
+            long dur = info.optLong("durationMs", -1);
+            if (dur >= 0 && !st.equals("running")) when += " · took " + formatDuration(dur);
+        }
+        t.setTextViewText(R.id.tile_when, when);
+        t.setViewVisibility(R.id.tile_when, when.isEmpty() ? View.GONE : View.VISIBLE);
+
+        // "Schedule · Active"
+        String meta = "";
+        if (info != null && info.optBoolean("found", true) && info.has("active")) {
+            String trig = info.optString("trigger", "");
+            meta = (trig.isEmpty() ? "" : trig + " · ") + (info.optBoolean("active") ? "Active" : "Inactive");
+        }
+        t.setTextViewText(R.id.tile_meta, meta);
+        t.setViewVisibility(R.id.tile_meta, meta.isEmpty() ? View.GONE : View.VISIBLE);
+
+        // Last runs as dots, oldest left, newest right, plus "Last 10: 9 OK · 1 failed".
+        String hist = info != null ? info.optString("history", "") : "";
+        for (int i = 0; i < HISTORY_DOTS.length; i++) {
+            int j = HISTORY_DOTS.length - 1 - i; // history is newest first; the newest dot is on the right
+            if (j >= hist.length()) { t.setViewVisibility(HISTORY_DOTS[i], View.GONE); continue; }
+            char ch = hist.charAt(j);
+            t.setViewVisibility(HISTORY_DOTS[i], View.VISIBLE);
+            t.setImageViewResource(HISTORY_DOTS[i], ch == 's' ? R.drawable.widget_dot_ok : ch == 'e' ? R.drawable.widget_dot_bad
+                : ch == 'c' ? R.drawable.widget_dot_warn : R.drawable.widget_dot_info);
+        }
+        String rate = "";
+        if (!hist.isEmpty()) {
+            int ok = info.optInt("ok"), bad = info.optInt("failed");
+            rate = "Last " + hist.length() + ": " + ok + " OK" + (bad > 0 ? " · " + bad + " failed" : "");
+        }
+        t.setTextViewText(R.id.tile_rate, rate);
+        t.setViewVisibility(R.id.tile_rate, rate.isEmpty() ? View.GONE : View.VISIBLE);
+
+        setButtons(c, t, widgetId, wfId, info, pending);
+        return t;
+    }
+
+    private static void setButtons(Context c, RemoteViews t, int widgetId, String wfId, JSONObject info, long pending) {
+        t.setOnClickPendingIntent(R.id.tile, openApp(c, wfId));
+        boolean runnable = info == null || info.optBoolean("runnable", true);
+        if (pending > 0) {
+            // Already starting: the button only refreshes, so a second tap doesn't run it twice.
+            t.setImageViewResource(R.id.tile_play, R.drawable.widget_ic_play);
+            t.setInt(R.id.tile_play, "setImageAlpha", 90);
+            t.setOnClickPendingIntent(R.id.tile_play, broadcast(c, WorkflowWidgetProvider.ACTION_REFRESH, widgetId, null));
+        } else if (runnable) {
+            t.setImageViewResource(R.id.tile_play, R.drawable.widget_ic_play);
+            t.setOnClickPendingIntent(R.id.tile_play, broadcast(c, WorkflowWidgetProvider.ACTION_RUN, widgetId, wfId));
+        } else {
+            // Starts only from its own trigger (schedule, form, chat…): open it in the app instead.
+            t.setImageViewResource(R.id.tile_play, R.drawable.widget_ic_open);
+            t.setOnClickPendingIntent(R.id.tile_play, openApp(c, wfId));
+        }
+    }
+
+    /** "Today 14:02", "Yesterday 09:10", "Nov 3, 14:02". */
+    static String formatWhen(Context c, long t) {
+        String time = DateFormat.getTimeFormat(c).format(new Date(t));
+        if (DateUtils.isToday(t)) return "Today " + time;
+        if (DateUtils.isToday(t + DateUtils.DAY_IN_MILLIS)) return "Yesterday " + time;
+        return DateUtils.formatDateTime(c, t, DateUtils.FORMAT_SHOW_DATE | DateUtils.FORMAT_ABBREV_MONTH | DateUtils.FORMAT_NO_YEAR) + ", " + time;
+    }
+
+    static String formatDuration(long ms) {
+        if (ms < 1000) return String.format(Locale.US, "%.1f s", ms / 1000.0);
+        long s = ms / 1000;
+        if (s < 60) return s + " s";
+        long m = s / 60;
+        if (m < 60) return m + " min";
+        return (m / 60) + " h " + (m % 60) + " min";
+    }
+
+    /** Compact tile for a widget smaller than 2x2. */
     private static RemoteViews tile(Context c, int widgetId, String wfId) {
         RemoteViews t = new RemoteViews(c.getPackageName(), R.layout.widget_tile);
         JSONObject info = WidgetStore.workflow(c, wfId);
@@ -125,21 +235,7 @@ final class WidgetRenderer {
         t.setTextViewText(R.id.tile_status, status.trim());
         t.setImageViewResource(R.id.tile_dot, dot);
 
-        t.setOnClickPendingIntent(R.id.tile, openApp(c, wfId));
-        boolean runnable = info == null || info.optBoolean("runnable", true);
-        if (pending > 0) {
-            // Already starting: the button only refreshes, so a second tap doesn't run it twice.
-            t.setImageViewResource(R.id.tile_play, R.drawable.widget_ic_play);
-            t.setInt(R.id.tile_play, "setImageAlpha", 90);
-            t.setOnClickPendingIntent(R.id.tile_play, broadcast(c, WorkflowWidgetProvider.ACTION_REFRESH, widgetId, null));
-        } else if (runnable) {
-            t.setImageViewResource(R.id.tile_play, R.drawable.widget_ic_play);
-            t.setOnClickPendingIntent(R.id.tile_play, broadcast(c, WorkflowWidgetProvider.ACTION_RUN, widgetId, wfId));
-        } else {
-            // Starts only from its own trigger (schedule, form, chat…): open it in the app instead.
-            t.setImageViewResource(R.id.tile_play, R.drawable.widget_ic_open);
-            t.setOnClickPendingIntent(R.id.tile_play, openApp(c, wfId));
-        }
+        setButtons(c, t, widgetId, wfId, info, pending);
         return t;
     }
 

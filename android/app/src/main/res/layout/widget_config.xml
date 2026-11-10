@@ -20,7 +20,7 @@
         android:layout_height="wrap_content"
         android:paddingTop="6dp"
         android:paddingBottom="10dp"
-        android:text="Each home screen cell shows one workflow, in the order you tick them. Make the widget bigger to see more of them."
+        android:text="The widget shows them in the order you tick them. Each one takes a 2x2 space: make the widget bigger (4x2, 4x4…) to see more of them."
         android:textAppearance="?android:attr/textAppearanceSmall" />
 
     <EditText
