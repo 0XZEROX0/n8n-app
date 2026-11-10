@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Workflow picker for the widget: the app's own colours (public/styles.css). Dark in values-night. -->
+    <color name="cfg_bg">#FFF5F5F8</color>
+    <color name="cfg_surface">#FFFFFFFF</color>
+    <color name="cfg_surface2">#FFF0EFF5</color>
+    <color name="cfg_text">#FF1D1B26</color>
+    <color name="cfg_muted">#FF6B6880</color>
+    <color name="cfg_border">#FFE3E1EA</color>
+    <color name="cfg_accent">#FFEA4B71</color>
+    <color name="cfg_accent_soft">#1FEA4B71</color>
+    <color name="cfg_ok">#FF1F9D55</color>
+    <color name="cfg_bad">#FFD0342C</color>
+</resources>
